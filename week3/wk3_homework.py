@@ -83,24 +83,17 @@ class Wk3Dataset(Dataset):
 
         if five_crop:
             image = self.transform_fivecrop(image)
+            image = [transforms.ToTensor()(t) for t in image]
+            image = [t.repeat([3,1,1]) if t.size()[0] == 1 else t
+                     for t in image]
+            image = torch.stack(image)
+            # stack :- 5 [3, 224, 224] tensor into [5, 3, 224, 224]
+            # cat:- 5 [3, 224, 224] tensor into [15, 224, 224]
         else:
             image = self.transform_centercrop(image)
+            image = transforms.ToTensor()(image)
 
-        image = transforms.ToTensor()(image)
-
-        # dealing with grayscale - centercrop
-        if not five_crop and image.size()[0] == 1:
-            image = image.repeat([3,1,1])
-
-        # dealing with grayscale - fivecrop
-        if five_crop and image.size()[0] == 1:
-            image = image.repeat([3,1,1,1])
-
-        itm = {'label':label_vector.astype(np.float32),
-               #'firstname': firstname,
-               'image':image,
-               #'filename':self.get_img_path(index)
-               }
+        itm = {'label':label_vector.astype(np.float32), 'image':image}
         return itm
         
     #   Transform functions - always returns a function
@@ -129,34 +122,49 @@ class Wk3Dataset(Dataset):
         return crop_image
 
     def transform_fivecrop(self, image, size=224):
-        assert NotImplementedError
+        width, height = image.size 
+        center_crop = self.transform_centercrop(image, size=size)
+        topleft_crop = image.crop((0, 0, size, size))
+        topright_crop = image.crop((width - size, 0, width, size))
+        botleft_crop = image.crop((0, height - size, size, height))
+        botright_crop = image.crop((width - size, height - size, width, height))
+        return [center_crop, topleft_crop, topright_crop, botleft_crop, botright_crop]
 
 
 ######
 #   Training codes
 ######
 
-def train_model(dataset, model, optimizer, num_epoch=10, validation=False, use_gpu=False):
+def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
     '''
     Train the given model through the epochs.
     if validation is false, should be training mode
     '''
-    loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1)
+    loader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=1)
     criterion=torch.nn.BCEWithLogitsLoss(weight=None)
     model.train(not validation)
+    five_crop = dataset.meta['five_crop']
+
     for e in range(num_epoch):
         print('Epoch {}..'.format(e))
         # TODO: implement AlexNet (should be simple ones)
-        running_loss = 0
+        running_loss = 0.0
+        running_corrects = np.zeros(len(dataset.classes))
         for data in loader:
             inputs, labels = data['image'], data['label']
-            if use_gpu:
-                inputs = Variable(inputs.cuda())
-                labels = Variable(labels.cuda())
-            else:
-                inputs, labels = Variable(inputs), Variable(labels)
+            if five_crop:
+                # Handling 5 crop by unfolding
+                # print('handling 5crop', inputs.size(), labels.size())
+                batch_size, _, channel, size = inputs.size()[0:-1]
+                inputs = inputs.reshape(-1, channel, size, size)
+
+                labels = labels.transpose(0, 1) # swap dimension 0 & 1
+                labels = labels.unsqueeze(2).expand(-1, -1, 5)
+                labels = labels.transpose(0, 2).reshape(-1, len(dataset.classes))
+                # print('after 5crop', inputs.size(), labels.size())
+            inputs, labels = Variable(inputs), Variable(labels)
             outputs = model(inputs)
-            #predictions = outputs.data >= 0
+            predictions = outputs.data >= 0
 
             loss=0
             for c in range(len(dataset.classes)):
@@ -167,9 +175,16 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False, use_g
                 optimizer.step()
 
             running_loss += loss.cpu().data[0]
+            for c in range(len(dataset.classes)):
+                running_corrects[c] += torch.sum(predictions.cpu()[:,c] == labels.type(torch.ByteTensor)[:,c])
         
         epoch_loss = running_loss / len(dataset)
-        print("Epoch loss: {}".format(epoch_loss))
+        if five_crop: epoch_loss /= 5
+        epoch_acc = 0
+        for c in range(len(dataset.classes)):
+            epoch_acc += running_corrects[c] / float(len(dataset)) / float(len(dataset.classes))
+        if five_crop: epoch_acc /=5
+        print("Epoch {}: loss {} accuracy {}".format(e, epoch_loss, epoch_acc))
 
     return model
 
@@ -179,31 +194,32 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False, use_g
 def test_dataset(dataset, index=10):
     # testing dataset getitem
     ww = dataset[index]
-    print('dataset length', len(dataset))
+    print('dataset length', len(dataset), ww['image'].size())
     # print('loaded label', dataset.dataset[index], ww['label'], ww['image'].size())
 
-def run_training():
+def run_training(five_crop=False):
     '''
     Run training with preset parameters.
     '''
     wk3dataset = Wk3Dataset('../datasets/imagenet_first2500/', 
-                            data_limit=160) # put data_limit=0 for loading everything
+                            # data_limit=0)
+                            data_limit=160, five_crop=five_crop) # put data_limit=0 for loading everything
     test_dataset(wk3dataset)
-    # OK up to this point
+
+    # return
 
     #model - copied straight from pascalvoc
     # TODO: revise / modify
-    model_ft = models.resnet18(pretrained=True)
+    model_ft = models.resnet18(pretrained=False)
     num_ftrs = model_ft.fc.in_features
     model_ft.fc = nn.Linear(num_ftrs, len(wk3dataset.classes))
-    
     # optimizer - straight from pascalvoc
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
-    model_ft = train_model(wk3dataset, model_ft, optimizer_ft, num_epoch=1)
+    model_ft = train_model(wk3dataset, model_ft, optimizer_ft, num_epoch=5)
 
 
 def main():
-    run_training()
+    run_training(five_crop=False)
 
 if __name__ == '__main__':
     main()
