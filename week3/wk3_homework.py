@@ -14,6 +14,7 @@ import getimagenetclasses as ginc
 import os
 import math
 import numpy as np
+import itertools
 
 
 #####
@@ -23,7 +24,7 @@ import numpy as np
 class Wk3Dataset(Dataset):
     def __init__(self, root_dir, file_prefix='ILSVRC2012_val_',
                  img_ext='.JPEG', val_ext='.xml', synset='synset_words.txt',
-                 five_crop=False, data_limit=0):
+                 five_crop=False, data_limit=0, selector=None):
         '''
         NOTE: set up your root_dir directory to consist of 
         2 directories:
@@ -48,6 +49,10 @@ class Wk3Dataset(Dataset):
                         for filename in os.listdir(os.path.join(root_dir, 'imagespart'))]
         if data_limit > 0:
             self.dataset = self.dataset[:data_limit]
+
+        if selector is not None:
+            self.dataset = [d for d, s in zip(self.dataset, selector) if s]
+
         self._rev_dataset = s2i 
         self.data_description = s2d
 
@@ -92,7 +97,9 @@ class Wk3Dataset(Dataset):
         else:
             image = self.transform_centercrop(image)
             image = transforms.ToTensor()(image)
+            if image.size()[0] == 1: image = image.repeat((3,1,1))
 
+        image = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(image)
         itm = {'label':label_vector.astype(np.float32), 'image':image}
         return itm
         
@@ -140,13 +147,15 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
     Train the given model through the epochs.
     if validation is false, should be training mode
     '''
-    loader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=1)
+    loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=1)
     criterion=torch.nn.BCEWithLogitsLoss(weight=None)
     model.train(not validation)
     five_crop = dataset.meta['five_crop']
 
+    mode = 'Val' if validation else 'Train'
+
     for e in range(num_epoch):
-        print('Epoch {}..'.format(e))
+        print('{} - Epoch {}..'.format(mode, e))
         # TODO: implement AlexNet (should be simple ones)
         running_loss = 0.0
         running_corrects = np.zeros(len(dataset.classes))
@@ -162,9 +171,11 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
                 labels = labels.unsqueeze(2).expand(-1, -1, 5)
                 labels = labels.transpose(0, 2).reshape(-1, len(dataset.classes))
                 # print('after 5crop', inputs.size(), labels.size())
+
             inputs, labels = Variable(inputs), Variable(labels)
             outputs = model(inputs)
-            predictions = outputs.data >= 0
+            # predictions = outputs.data >= 0
+            predictions = (outputs.data == torch.max(outputs.data)) # max to 1, else 0
 
             loss=0
             for c in range(len(dataset.classes)):
@@ -174,7 +185,7 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
                 loss.backward()
                 optimizer.step()
 
-            running_loss += loss.cpu().data[0]
+            running_loss += loss.item() #loss.cpu().data[0]
             for c in range(len(dataset.classes)):
                 running_corrects[c] += torch.sum(predictions.cpu()[:,c] == labels.type(torch.ByteTensor)[:,c])
         
@@ -184,14 +195,32 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
         for c in range(len(dataset.classes)):
             epoch_acc += running_corrects[c] / float(len(dataset)) / float(len(dataset.classes))
         if five_crop: epoch_acc /=5
-        print("Epoch {}: loss {} accuracy {}".format(e, epoch_loss, epoch_acc))
+        print("      loss {} accuracy {}".format(e, epoch_loss, epoch_acc))
 
     return model
 
 
 # some test
 
-def test_dataset(dataset, index=10):
+def generate_train_valset(root_path, limit=0, val_portion=0.1, five_crop=False):
+    """
+    Randomly split a dataset into non-overlapping new datasets of given lengths.
+    """
+    wk3dataset = Wk3Dataset(root_path, data_limit=limit, five_crop=five_crop)
+    current_limit =  len(wk3dataset)
+
+    train_mask = np.ones(current_limit)
+    train_mask[:int(current_limit * val_portion)] -= 1
+    np.random.shuffle(train_mask)
+    val_mask = 1 - train_mask
+
+    wk3train = Wk3Dataset(root_path, selector=train_mask,
+                          data_limit=limit, five_crop=five_crop)
+    wk3val = Wk3Dataset(root_path, selector=val_mask,
+                        data_limit=limit, five_crop=five_crop)
+    return wk3train, wk3val
+
+def test_dataset(dataset, index=0):
     # testing dataset getitem
     ww = dataset[index]
     print('dataset length', len(dataset), ww['image'].size())
@@ -201,10 +230,11 @@ def run_training(five_crop=False):
     '''
     Run training with preset parameters.
     '''
-    wk3dataset = Wk3Dataset('../datasets/imagenet_first2500/', 
-                            # data_limit=0)
-                            data_limit=160, five_crop=five_crop) # put data_limit=0 for loading everything
-    test_dataset(wk3dataset)
+    dataset_count = 100
+    wk3train, wk3val = generate_train_valset('../datasets/imagenet_first2500/', five_crop=five_crop,
+                                             limit=dataset_count)
+    test_dataset(wk3train)
+    test_dataset(wk3val)
 
     # return
 
@@ -212,10 +242,13 @@ def run_training(five_crop=False):
     # TODO: revise / modify
     model_ft = models.resnet18(pretrained=False)
     num_ftrs = model_ft.fc.in_features
-    model_ft.fc = nn.Linear(num_ftrs, len(wk3dataset.classes))
+    model_ft.fc = nn.Linear(num_ftrs, len(wk3train.classes))
     # optimizer - straight from pascalvoc
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
-    model_ft = train_model(wk3dataset, model_ft, optimizer_ft, num_epoch=5)
+    # training
+    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=1)
+    # validation
+    model_ft = train_model(wk3val, model_ft, optimizer_ft, num_epoch=1, validation=True)
 
 
 def main():
