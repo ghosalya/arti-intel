@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -11,8 +10,7 @@ import torchvision
 from torchvision import models, transforms, utils
 
 import getimagenetclasses as ginc
-import os
-import math
+import os, math, time
 import numpy as np
 import itertools
 
@@ -147,7 +145,8 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
     Train the given model through the epochs.
     if validation is false, should be training mode
     '''
-    loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=1)
+    loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4)
+    epoch_loop = len(dataset) // 32 + 1
     criterion=torch.nn.BCEWithLogitsLoss(weight=None)
     model.train(not validation)
     five_crop = dataset.meta['five_crop']
@@ -156,10 +155,12 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
 
     for e in range(num_epoch):
         print('{} - Epoch {}..'.format(mode, e))
+        epoch_start = time.clock()
         # TODO: implement AlexNet (should be simple ones)
         running_loss = 0.0
         running_corrects = np.zeros(len(dataset.classes))
         for data in loader:
+            optimizer.zero_grad()
             inputs, labels = data['image'], data['label']
             if five_crop:
                 # Handling 5 crop by unfolding
@@ -176,6 +177,7 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
             outputs = model(inputs)
             # predictions = outputs.data >= 0
             predictions = (outputs.data == torch.max(outputs.data)) # max to 1, else 0
+            correct = predictions.cpu() * labels.type(torch.ByteTensor)
 
             loss=0
             for c in range(len(dataset.classes)):
@@ -185,17 +187,21 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
                 loss.backward()
                 optimizer.step()
 
-            running_loss += loss.item() #loss.cpu().data[0]
+            running_loss += loss.cpu().data[0]
             for c in range(len(dataset.classes)):
-                running_corrects[c] += torch.sum(predictions.cpu()[:,c] == labels.type(torch.ByteTensor)[:,c])
+                running_corrects[c] += torch.sum(correct[:,c])
         
         epoch_loss = running_loss / len(dataset)
         if five_crop: epoch_loss /= 5
         epoch_acc = 0
         for c in range(len(dataset.classes)):
-            epoch_acc += running_corrects[c] / float(len(dataset)) / float(len(dataset.classes))
+            epoch_acc += running_corrects[c] 
+        epoch_acc /= float(len(dataset)) 
         if five_crop: epoch_acc /=5
-        print("      loss {} accuracy {}".format(e, epoch_loss, epoch_acc))
+
+        epoch_end = time.clock()
+        epoch_time = epoch_end - epoch_start
+        print("      >> Epoch loss {:.5f} accuracy {:.3f}        in {:.4f}s".format(epoch_loss, epoch_acc, epoch_time))
 
     return model
 
@@ -230,7 +236,7 @@ def run_training(five_crop=False):
     '''
     Run training with preset parameters.
     '''
-    dataset_count = 100
+    dataset_count = 10
     wk3train, wk3val = generate_train_valset('../datasets/imagenet_first2500/', five_crop=five_crop,
                                              limit=dataset_count)
     test_dataset(wk3train)
@@ -240,13 +246,13 @@ def run_training(five_crop=False):
 
     #model - copied straight from pascalvoc
     # TODO: revise / modify
-    model_ft = models.resnet18(pretrained=False)
+    model_ft = models.resnet18(pretrained=True)
     num_ftrs = model_ft.fc.in_features
     model_ft.fc = nn.Linear(num_ftrs, len(wk3train.classes))
     # optimizer - straight from pascalvoc
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
     # training
-    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=1)
+    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=5)
     # validation
     model_ft = train_model(wk3val, model_ft, optimizer_ft, num_epoch=1, validation=True)
 
