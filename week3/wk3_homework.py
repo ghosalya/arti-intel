@@ -42,7 +42,7 @@ class Wk3Dataset(Dataset):
 
         # metadata
         self.classes = ginc.get_classes()
-        i2s, s2i, s2d = ginc.parsesynsetwords(self.meta['synset'])
+        _, s2i, s2d = ginc.parsesynsetwords(self.meta['synset'])
         self.dataset = [filename[len(file_prefix):-len(img_ext)]
                         for filename in os.listdir(os.path.join(root_dir, 'imagespart'))]
         if data_limit > 0:
@@ -73,7 +73,7 @@ class Wk3Dataset(Dataset):
         # since filenames starts with 1, index should be incremented
         index = self.dataset[idx]
         # 1. get corresponding dataset metadata
-        label, firstname = ginc.parseclasslabel(self.get_val_path(index), self._rev_dataset)
+        label, _ = ginc.parseclasslabel(self.get_val_path(index), self._rev_dataset)
 
         # index label
         label_vector = int(label)
@@ -161,22 +161,22 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
             inputs, labels = data['image'], data['label']
             if five_crop:
                 # Handling 5 crop by unfolding
-                batch_size, _, channel, size = inputs.size()[0:-1]
+                _, _, channel, size, _ = inputs.size()
                 inputs = inputs.reshape(-1, channel, size, size)
                 labels = np.repeat(labels, 5)
 
             inputs, labels = Variable(inputs), Variable(labels)
             outputs = model(inputs)
-            _, predictions = torch.max(outputs, 1)
+            _, predictions = outputs.max(dim=1)
             # print(predictions)
             # print(labels)
             # print((predictions.cpu() == labels.cpu()))
 
+            loss = criterion(outputs, labels) / len(dataset)
             if not validation:
                 loss.backward()
                 optimizer.step()
 
-            loss = criterion(outputs, labels) / len(dataset)
             running_loss += loss.item()
             running_corrects += (predictions == labels).sum().item()
         
@@ -217,11 +217,10 @@ def test_dataset(dataset, index=0):
     ww = dataset[index]
     print('dataset length', len(dataset), ww['image'].size())
 
-def run_training(five_crop=False):
+def run_training(five_crop=False, dataset_count=250):
     '''
     Run training with preset parameters.
     '''
-    dataset_count = 250
     wk3train, wk3val = generate_train_valset('../datasets/imagenet_first2500/', five_crop=five_crop,
                                              limit=dataset_count)
     test_dataset(wk3train)
@@ -246,7 +245,7 @@ def run_training(five_crop=False):
 
 
 def main():
-    run_training(five_crop=False)
+    run_training(five_crop=True)
 
 if __name__ == '__main__':
     main()
