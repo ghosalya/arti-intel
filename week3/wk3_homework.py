@@ -74,9 +74,9 @@ class Wk3Dataset(Dataset):
         index = self.dataset[idx]
         # 1. get corresponding dataset metadata
         label, firstname = ginc.parseclasslabel(self.get_val_path(index), self._rev_dataset)
-        # convert label to a vector of size len_class
-        label_vector = np.zeros(len(self.classes))
-        label_vector[int(label)] = 1
+
+        # index label
+        label_vector = int(label)
         
         # 2. load the image file
         image = Image.open(self.get_img_path(index))
@@ -97,8 +97,7 @@ class Wk3Dataset(Dataset):
             image = transforms.ToTensor()(image)
             if image.size()[0] == 1: image = image.repeat((3,1,1))
 
-        image = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(image)
-        itm = {'label':label_vector.astype(np.float32), 'image':image}
+        itm = {'label':label_vector, 'image':image}
         return itm
         
     #   Transform functions - always returns a function
@@ -146,8 +145,7 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
     if validation is false, should be training mode
     '''
     loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4)
-    epoch_loop = len(dataset) // 32 + 1
-    criterion=torch.nn.BCEWithLogitsLoss(weight=None)
+    criterion=torch.nn.CrossEntropyLoss()
     model.train(not validation)
     five_crop = dataset.meta['five_crop']
 
@@ -156,52 +154,40 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
     for e in range(num_epoch):
         print('{} - Epoch {}..'.format(mode, e))
         epoch_start = time.clock()
-        # TODO: implement AlexNet (should be simple ones)
         running_loss = 0.0
-        running_corrects = np.zeros(len(dataset.classes))
+        running_corrects = 0 
         for data in loader:
             optimizer.zero_grad()
             inputs, labels = data['image'], data['label']
             if five_crop:
                 # Handling 5 crop by unfolding
-                # print('handling 5crop', inputs.size(), labels.size())
                 batch_size, _, channel, size = inputs.size()[0:-1]
                 inputs = inputs.reshape(-1, channel, size, size)
-
-                labels = labels.transpose(0, 1) # swap dimension 0 & 1
-                labels = labels.unsqueeze(2).expand(-1, -1, 5)
-                labels = labels.transpose(0, 2).reshape(-1, len(dataset.classes))
-                # print('after 5crop', inputs.size(), labels.size())
+                labels = np.repeat(labels, 5)
 
             inputs, labels = Variable(inputs), Variable(labels)
             outputs = model(inputs)
-            # predictions = outputs.data >= 0
-            predictions = (outputs.data == torch.max(outputs.data)) # max to 1, else 0
-            correct = predictions.cpu() * labels.type(torch.ByteTensor)
-
-            loss=0
-            for c in range(len(dataset.classes)):
-                loss += criterion(outputs[:,c], labels[:,c])
+            _, predictions = torch.max(outputs, 1)
+            # print(predictions)
+            # print(labels)
+            # print((predictions.cpu() == labels.cpu()))
 
             if not validation:
                 loss.backward()
                 optimizer.step()
 
-            running_loss += loss.cpu().data[0]
-            for c in range(len(dataset.classes)):
-                running_corrects[c] += torch.sum(correct[:,c])
+            loss = criterion(outputs, labels) / len(dataset)
+            running_loss += loss.item()
+            running_corrects += (predictions == labels).sum().item()
         
-        epoch_loss = running_loss / len(dataset)
+        epoch_loss = running_loss 
         if five_crop: epoch_loss /= 5
-        epoch_acc = 0
-        for c in range(len(dataset.classes)):
-            epoch_acc += running_corrects[c] 
-        epoch_acc /= float(len(dataset)) 
-        if five_crop: epoch_acc /=5
+        epoch_acc = running_corrects / float(len(dataset)) 
+        if five_crop: epoch_acc /= 5
 
-        epoch_end = time.clock()
-        epoch_time = epoch_end - epoch_start
-        print("      >> Epoch loss {:.5f} accuracy {:.3f}        in {:.4f}s".format(epoch_loss, epoch_acc, epoch_time))
+        epoch_time = time.clock() - epoch_start
+        print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
+              in {:.4f}s".format(epoch_loss, epoch_acc, epoch_time))
 
     return model
 
@@ -223,38 +209,40 @@ def generate_train_valset(root_path, limit=0, val_portion=0.1, five_crop=False):
     wk3train = Wk3Dataset(root_path, selector=train_mask,
                           data_limit=limit, five_crop=five_crop)
     wk3val = Wk3Dataset(root_path, selector=val_mask,
-                        data_limit=limit, five_crop=five_crop)
+                        data_limit=limit, five_crop=False) # validation set never has 5crop
     return wk3train, wk3val
 
 def test_dataset(dataset, index=0):
     # testing dataset getitem
     ww = dataset[index]
     print('dataset length', len(dataset), ww['image'].size())
-    # print('loaded label', dataset.dataset[index], ww['label'], ww['image'].size())
 
 def run_training(five_crop=False):
     '''
     Run training with preset parameters.
     '''
-    dataset_count = 10
+    dataset_count = 250
     wk3train, wk3val = generate_train_valset('../datasets/imagenet_first2500/', five_crop=five_crop,
                                              limit=dataset_count)
     test_dataset(wk3train)
     test_dataset(wk3val)
-
     # return
 
-    #model - copied straight from pascalvoc
-    # TODO: revise / modify
-    model_ft = models.resnet18(pretrained=True)
-    num_ftrs = model_ft.fc.in_features
-    model_ft.fc = nn.Linear(num_ftrs, len(wk3train.classes))
-    # optimizer - straight from pascalvoc
+    #model - use alexnet
+    model_ft = models.alexnet(pretrained=True, num_classes=len(wk3train.classes))
+    # unfreeze the last layer
+    num_ftrs = model_ft.classifier[6].in_features
+    features = list(model_ft.classifier.children())[:-1]
+    features.extend([nn.Linear(num_ftrs, len(wk3train.classes))])
+    model_ft.classifier = nn.Sequential(*features)
+    #optimizer
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
+
     # training
-    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=5)
+    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=2)
     # validation
     model_ft = train_model(wk3val, model_ft, optimizer_ft, num_epoch=1, validation=True)
+    return wk3val, model_ft
 
 
 def main():
