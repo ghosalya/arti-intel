@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
@@ -84,9 +85,11 @@ class Wk3Dataset(Dataset):
 
         five_crop = self.meta['five_crop']
 
+        normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+
         if five_crop:
             image = self.transform_fivecrop(image)
-            image = [transforms.ToTensor()(t) for t in image]
+            image = [normalize(transforms.ToTensor()(t)) for t in image]
             image = [t.repeat([3,1,1]) if t.size()[0] == 1 else t
                      for t in image]
             image = torch.stack(image)
@@ -95,6 +98,7 @@ class Wk3Dataset(Dataset):
         else:
             image = self.transform_centercrop(image)
             image = transforms.ToTensor()(image)
+            image = normalize(image)
             if image.size()[0] == 1: image = image.repeat((3,1,1))
 
         itm = {'label':label_vector, 'image':image}
@@ -139,12 +143,12 @@ class Wk3Dataset(Dataset):
 #   Training codes
 ######
 
-def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
+def train_model(dataset, model, optimizer, scheduler=None, num_epoch=10, validation=False, use_gpu=False):
     '''
     Train the given model through the epochs.
     if validation is false, should be training mode
     '''
-    loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4)
+    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4)
     criterion=torch.nn.CrossEntropyLoss()
     model.train(not validation)
     five_crop = dataset.meta['five_crop']
@@ -156,6 +160,7 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
         epoch_start = time.clock()
         running_loss = 0.0
         running_corrects = 0 
+        if scheduler is not None: scheduler.step()
         for data in loader:
             optimizer.zero_grad()
             inputs, labels = data['image'], data['label']
@@ -163,14 +168,22 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
                 # Handling 5 crop by unfolding
                 _, _, channel, size, _ = inputs.size()
                 inputs = inputs.reshape(-1, channel, size, size)
-                labels = np.repeat(labels, 5)
 
-            inputs, labels = Variable(inputs), Variable(labels)
+            if use_gpu:
+                inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+            else:    
+                inputs, labels = Variable(inputs), Variable(labels)
             outputs = model(inputs)
+
+            if five_crop:
+                # handle averaging of the 5 crop prediction
+                outputs = outputs.reshape(5, -1, len(dataset.classes)).mean(dim=0)
+
             _, predictions = outputs.max(dim=1)
-            # print(predictions)
-            # print(labels)
-            # print((predictions.cpu() == labels.cpu()))
+            correct = (predictions.cpu() == labels.cpu())
+            print(predictions)
+            print(labels)
+            print(correct)
 
             loss = criterion(outputs, labels) / len(dataset)
             if not validation:
@@ -178,7 +191,7 @@ def train_model(dataset, model, optimizer, num_epoch=10, validation=False):
                 optimizer.step()
 
             running_loss += loss.item()
-            running_corrects += (predictions == labels).sum().item()
+            running_corrects += (correct).sum().item()
         
         epoch_loss = running_loss 
         if five_crop: epoch_loss /= 5
@@ -217,7 +230,26 @@ def test_dataset(dataset, index=0):
     ww = dataset[index]
     print('dataset length', len(dataset), ww['image'].size())
 
-def run_training(five_crop=False, dataset_count=250):
+# model options
+def get_alexnet(data_classes):
+    #model - use alexnet
+    model_ft = models.alexnet(pretrained=True, num_classes=data_classes)
+    # unfreeze the last layer
+    num_ftrs = model_ft.classifier[6].in_features
+    features = list(model_ft.classifier.children())[:-1]
+    features.extend([nn.Linear(num_ftrs, data_classes)])
+    model_ft.classifier = nn.Sequential(*features)
+    return model_ft
+
+def get_resnet(data_classes):
+    model_ft = models.resnet18(pretrained=True)
+    num_ftrs = model_ft.fc.in_features
+    model_ft.fc = nn.Linear(num_ftrs, data_classes)
+    model_ft.eval()
+    return model_ft
+
+# setup & run training
+def run_training(five_crop=False, dataset_count=250, use_gpu=True):
     '''
     Run training with preset parameters.
     '''
@@ -227,25 +259,27 @@ def run_training(five_crop=False, dataset_count=250):
     test_dataset(wk3val)
     # return
 
-    #model - use alexnet
-    model_ft = models.alexnet(pretrained=True, num_classes=len(wk3train.classes))
-    # unfreeze the last layer
-    num_ftrs = model_ft.classifier[6].in_features
-    features = list(model_ft.classifier.children())[:-1]
-    features.extend([nn.Linear(num_ftrs, len(wk3train.classes))])
-    model_ft.classifier = nn.Sequential(*features)
+    # get model of choice
+    get_model = get_resnet # change this for different nn
+    model_ft = get_model(len(wk3train.classes))
+    if use_gpu:
+        model_ft = model_ft.cuda(0)
     #optimizer
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=10, gamma=0.1)
 
     # training
-    model_ft = train_model(wk3train, model_ft, optimizer_ft, num_epoch=2)
+    model_ft = train_model(wk3train, model_ft, optimizer_ft, 
+                           scheduler=exp_lr_scheduler, num_epoch=2, use_gpu=use_gpu)
     # validation
-    model_ft = train_model(wk3val, model_ft, optimizer_ft, num_epoch=1, validation=True)
+    model_ft = train_model(wk3val, model_ft, optimizer_ft, 
+                           num_epoch=1, validation=True, use_gpu=use_gpu)
     return wk3val, model_ft
 
 
 def main():
-    run_training(five_crop=True)
+    run_training(five_crop=True, dataset_count=10)
+    run_training(five_crop=False, dataset_count=10)
 
 if __name__ == '__main__':
     main()
