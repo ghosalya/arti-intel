@@ -43,7 +43,7 @@ class Wk3Dataset(Dataset):
 
         # metadata
         self.classes = ginc.get_classes()
-        _, s2i, s2d = ginc.parsesynsetwords(self.meta['synset'])
+        _, s2i, s2d = ginc.parsesynsetwords(os.path.join(root_dir, synset))
         self.dataset = [filename[len(file_prefix):-len(img_ext)]
                         for filename in os.listdir(os.path.join(root_dir, 'imagespart'))]
         if data_limit > 0:
