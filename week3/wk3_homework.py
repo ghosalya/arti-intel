@@ -75,31 +75,25 @@ class Wk3Dataset(Dataset):
         index = self.dataset[idx]
         # 1. get corresponding dataset metadata
         label, _ = ginc.parseclasslabel(self.get_val_path(index), self._rev_dataset)
-
         # index label
         label_vector = int(label)
         
         # 2. load the image file
-        image = Image.open(self.get_img_path(index))
+        image = Image.open(self.get_img_path(index)).convert("RGB")
         image = self.transform_short(image)
 
         five_crop = self.meta['five_crop']
-
         normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
         if five_crop:
             image = self.transform_fivecrop(image)
             image = [normalize(transforms.ToTensor()(t)) for t in image]
-            image = [t.repeat([3,1,1]) if t.size()[0] == 1 else t
-                     for t in image]
             image = torch.stack(image)
             # stack :- 5 [3, 224, 224] tensor into [5, 3, 224, 224]
             # cat:- 5 [3, 224, 224] tensor into [15, 224, 224]
         else:
             image = self.transform_centercrop(image)
-            image = transforms.ToTensor()(image)
-            image = normalize(image)
-            if image.size()[0] == 1: image = image.repeat((3,1,1))
+            image = normalize(transforms.ToTensor()(image))
 
         itm = {'label':label_vector, 'image':image}
         return itm
@@ -148,7 +142,7 @@ def train_model(dataset, model, optimizer, scheduler=None, num_epoch=10, validat
     Train the given model through the epochs.
     if validation is false, should be training mode
     '''
-    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4)
+    loader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4)
     criterion=torch.nn.CrossEntropyLoss()
     model.train(not validation)
     five_crop = dataset.meta['five_crop']
@@ -173,30 +167,23 @@ def train_model(dataset, model, optimizer, scheduler=None, num_epoch=10, validat
                 inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
             else:    
                 inputs, labels = Variable(inputs), Variable(labels)
-            outputs = model(inputs)
+            outputs = model.forward(inputs)
 
             if five_crop:
                 # handle averaging of the 5 crop prediction
-                outputs = outputs.reshape(5, -1, len(dataset.classes)).mean(dim=0)
+                outputs = outputs.reshape(-1, 5, len(dataset.classes)).mean(dim=1)
 
             _, predictions = outputs.max(dim=1)
-            correct = (predictions.cpu() == labels.cpu())
-            print(predictions)
-            print(labels)
-            print(correct)
-
             loss = criterion(outputs, labels) / len(dataset)
             if not validation:
                 loss.backward()
                 optimizer.step()
 
             running_loss += loss.item()
-            running_corrects += (correct).sum().item()
+            running_corrects += (predictions.cpu() == labels.cpu()).sum().item()
         
         epoch_loss = running_loss 
-        if five_crop: epoch_loss /= 5
         epoch_acc = running_corrects / float(len(dataset)) 
-        if five_crop: epoch_acc /= 5
 
         epoch_time = time.clock() - epoch_start
         print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
@@ -206,80 +193,32 @@ def train_model(dataset, model, optimizer, scheduler=None, num_epoch=10, validat
 
 
 # some test
-
-def generate_train_valset(root_path, limit=0, val_portion=0.1, five_crop=False):
-    """
-    Randomly split a dataset into non-overlapping new datasets of given lengths.
-    """
-    wk3dataset = Wk3Dataset(root_path, data_limit=limit, five_crop=five_crop)
-    current_limit =  len(wk3dataset)
-
-    train_mask = np.ones(current_limit)
-    train_mask[:int(current_limit * val_portion)] -= 1
-    np.random.shuffle(train_mask)
-    val_mask = 1 - train_mask
-
-    wk3train = Wk3Dataset(root_path, selector=train_mask,
-                          data_limit=limit, five_crop=five_crop)
-    wk3val = Wk3Dataset(root_path, selector=val_mask,
-                        data_limit=limit, five_crop=False) # validation set never has 5crop
-    return wk3train, wk3val
-
 def test_dataset(dataset, index=0):
     # testing dataset getitem
     ww = dataset[index]
     print('dataset length', len(dataset), ww['image'].size())
 
-# model options
-def get_alexnet(data_classes):
-    #model - use alexnet
-    model_ft = models.alexnet(pretrained=True, num_classes=data_classes)
-    # unfreeze the last layer
-    num_ftrs = model_ft.classifier[6].in_features
-    features = list(model_ft.classifier.children())[:-1]
-    features.extend([nn.Linear(num_ftrs, data_classes)])
-    model_ft.classifier = nn.Sequential(*features)
-    return model_ft
-
-def get_resnet(data_classes):
-    model_ft = models.resnet18(pretrained=True)
-    num_ftrs = model_ft.fc.in_features
-    model_ft.fc = nn.Linear(num_ftrs, data_classes)
-    model_ft.eval()
-    return model_ft
-
 # setup & run training
-def run_training(five_crop=False, dataset_count=250, use_gpu=True):
+def run_validation(five_crop=False, dataset_count=250, use_gpu=True):
     '''
     Run training with preset parameters.
     '''
-    wk3train, wk3val = generate_train_valset('../datasets/imagenet_first2500/', five_crop=five_crop,
-                                             limit=dataset_count)
-    test_dataset(wk3train)
-    test_dataset(wk3val)
+    wk3dataset = Wk3Dataset('../datasets/imagenet_first2500/', data_limit=dataset_count, five_crop=five_crop)
+    test_dataset(wk3dataset)
     # return
 
-    # get model of choice
-    get_model = get_resnet # change this for different nn
-    model_ft = get_model(len(wk3train.classes))
+    model_ft = models.resnet18(pretrained=True)
     if use_gpu:
         model_ft = model_ft.cuda(0)
-    #optimizer
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9)
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=10, gamma=0.1)
 
-    # training
-    model_ft = train_model(wk3train, model_ft, optimizer_ft, 
-                           scheduler=exp_lr_scheduler, num_epoch=2, use_gpu=use_gpu)
-    # validation
-    model_ft = train_model(wk3val, model_ft, optimizer_ft, 
+    model_ft = train_model(wk3dataset, model_ft, optimizer_ft, 
                            num_epoch=1, validation=True, use_gpu=use_gpu)
-    return wk3val, model_ft
-
+    return wk3dataset, model_ft
 
 def main():
-    run_training(five_crop=True, dataset_count=10)
-    run_training(five_crop=False, dataset_count=10)
+    run_validation(five_crop=False, dataset_count=160)
+    run_validation(five_crop=True, dataset_count=160)
 
 if __name__ == '__main__':
     main()
