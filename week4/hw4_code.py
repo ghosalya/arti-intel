@@ -126,7 +126,7 @@ def train_model(dataset, model, optimizer, scheduler=None,
             running_corrects += (predictions.cpu() == labels.cpu()).sum().item()/float(len(dataset))
 
             if (iter % print_every) == 0:
-                print('                  ... iteration {}/{}'.format(iter, total_batch_count))
+                print('                  ... iteration {}/{}'.format(iter, total_batch_count), end='\r')
 
         epoch_time = time.clock() - epoch_start
         print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
