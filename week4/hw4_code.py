@@ -138,18 +138,14 @@ def train_model(dataset, model, optimizer, scheduler=None,
 Models
 '''
 
-def get_trained_resnet(numcl, use_gpu=True):
+def get_trained_resnet(use_gpu=True):
     model_ft = models.resnet18(pretrained=True)
-    # num_ftrs = model_ft.fc.in_features
-    # model_ft.fc = nn.Linear(num_ftrs, numcl)
     if use_gpu:
         model_ft = model_ft.cuda(0)
     return model_ft
 
-def get_empty_resnet(numcl, use_gpu=True):
+def get_empty_resnet(use_gpu=True):
     model_ft = models.resnet18(pretrained=False)
-    num_ftrs = model_ft.fc.in_features
-    model_ft.fc = nn.Linear(num_ftrs, numcl)
     if use_gpu:
         model_ft = model_ft.cuda(0)
     return model_ft
@@ -167,8 +163,7 @@ Main Function
 '''
 
 def run_training(model_ft, use_gpu=True, limit=None):
-    model_ft = get_trained_resnet(102)
-
+    # model_ft = get_trained_resnet(102)
     for learnrate in [1e-1, 1e-2, 1e-3]:
         print(" - with learnrate",learnrate)
         optimizer_ft = optim.SGD(model_ft.parameters(), lr=learnrate, momentum=0.9)
