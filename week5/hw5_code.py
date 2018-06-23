@@ -6,6 +6,7 @@ for homework 5
 '''
 import torch
 import PIL.Image as Image
+import PIL.ImageChops as ImChop
 
 import torchvision
 from torchvision import models, transforms, utils
@@ -45,6 +46,29 @@ def get_trained_resnet(use_gpu=True):
     if use_gpu:
         model_ft = model_ft.try_cuda()
     return model_ft
+
+def plot_with_difference(original, fooled):
+    '''
+    Takes the normalised tensor of two images and plot them
+    '''
+    fooled_v = fooled.clone().view(3,224,224).cpu().detach()
+    fooled_back = inv_transform(fooled_v)
+    original_back = inv_transform(original.clone())
+
+    plt.figure()
+    plt.subplot(131)
+    plt.imshow(original_back)
+    plt.title('original')
+
+    boi_diff = ImChop.difference(fooled_back, original_back)
+    plt.subplot(132)
+    plt.imshow(boi_diff)
+    plt.title('difference')
+
+    plt.subplot(133)
+    plt.imshow(fooled_back)
+    plt.title('fooling')
+    print("Total value difference:", np.array(boi_diff).sum(),"\nAverage value difference:", np.array(boi_diff).mean())
 
 # add function to torch.Tensor class
 # python gets stuck after getting the second cuda error
