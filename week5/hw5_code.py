@@ -28,6 +28,11 @@ inv_transform = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
                                 transforms.ToPILImage(),
                                 ])
 
+resize_transform = transforms.Compose([
+                    transforms.Resize(224),
+                    transforms.CenterCrop(224)
+                ])
+
 i2s, s2i, s2d = ginc.parsesynsetwords('synset_words.txt')
 
 def get_descript(class_no):
@@ -38,5 +43,24 @@ def get_descript(class_no):
 def get_trained_resnet(use_gpu=True):
     model_ft = models.resnet18(pretrained=True)
     if use_gpu:
-        model_ft = model_ft.cuda(0)
+        model_ft = model_ft.try_cuda()
     return model_ft
+
+# add function to torch.Tensor class
+# python gets stuck after getting the second cuda error
+# so after the first error, this function should always
+# return self
+have_cuda = True
+def try_cuda(self):
+    global have_cuda
+    if have_cuda:
+        try:
+            with_cuda = self.cuda()
+            return with_cuda
+        except Exception as e:
+            have_cuda = False
+            print("try_cuda failed:",e,"\n proceeding without cuda")
+    return self
+    
+torch.Tensor.try_cuda = try_cuda
+torch.nn.Module.try_cuda = try_cuda
