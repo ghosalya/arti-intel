@@ -104,8 +104,6 @@ class InternationalNameDataset(Dataset):
         '''
         line, category = self.name_list[index]
         category_index = self.categories.index(category)
-        category_onehot = torch.zeros(len(self.categories))
-        category_onehot[category_index] = 1
         line_tensor = string_to_tensor(line, pad_to=self.meta["pad_maxsize"])
         return {'label': category_index,
                 'input': line_tensor,
@@ -238,7 +236,7 @@ def plot_varying_epochs(loss_acc_dict):
     train_losses = [loss_acc_dict[i][0] for i in sorted(loss_acc_dict.keys())]
     test_losses = [loss_acc_dict[i][1] for i in sorted(loss_acc_dict.keys())]
     accuracy = [loss_acc_dict[i][2] for i in sorted(loss_acc_dict.keys())]
-    
+
     plt.subplot(131)
     plt.plot(train_losses, color='purple')
     plt.xticks(range(4), [1,2,5,10])
