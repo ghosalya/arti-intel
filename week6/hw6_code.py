@@ -39,6 +39,15 @@ def string_to_tensor(inputstring, pad_to=0):
         tensor[i][letter_index(letter)] = 1
     return tensor
 
+# split csv according to `,` but preserving any `, ` which is usually in a line
+def split_csv(s, ignore=', '):
+    # uses '$' to replace `, `, and ^ to replace','
+    # and then split by '^' and convert '$' back to ', '
+    s = s.replace(ignore, '$')
+    s = s.replace(',', '^')
+    s = s.replace('$', ignore)
+    return s.split('^')
+    
 '''
 -------- Dataset ---------
 '''
@@ -66,7 +75,7 @@ class MovieScriptDataset(Dataset):
         with open(filename, 'r') as infile:
             filecontent = strip_symbols(infile.read())
             if self.meta['ext'] == '.csv':
-                filecontent = filecontent.split(',')
+                filecontent = split_csv(filecontent)
             else:
                 filecontent = filecontent.split('\n')
             lines = [convert_to_ascii(content.strip()) for content in filecontent
@@ -175,7 +184,10 @@ class CoveredLSTM(nn.LSTM):
         category should already be parsed (an integer/tensor)
         '''
         if start_letter == None:
-            start_letter = random.choice(string.ascii_letters)
+            # start_letter = random.choice(string.ascii_letters)
+            start_letter = random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+        self.train() # put in train mode to keep randomization
 
         with torch.no_grad():
             inputs = string_to_tensor(start_letter).view(1,1,-1)
@@ -259,31 +271,39 @@ def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
 
                 output, cache = model(batch_input, cache)
                 _, pred = output.topk(1)
-                # print('output', output.size())
+                # print('output', output)#.size())
                 
                 loss = criterion(output.view(-1, len(charspace)), 
                                  batch_label.long())
+                # print('itme', loss.item())
                 running_loss += loss.item() / float(len(dataset))
-                running_corrects += (pred == batch_label.long()).sum().item()/float(len(dataset))
-                total_letters += batch_in_size
+                running_corrects += (pred == batch_label.long()).sum().item()
+                total_letters += batch_in_size.item()
 
                 if mode == 'train':
                     retain = (current_batch_in + batch_in_size) < len(inputs.data)
                     # retain_graph must be set to True except the last one
                     # which is when all batches has been processed
                     loss.backward(retain_graph=retain)
+                    optimizer.step()
+                    optimizer.zero_grad() 
+                    # call zero grad to clear since you have already descended
+
                 current_batch_in += batch_in_size
 
-            if mode == 'train': optimizer.step()
+            if mode == 'train': 
+                print('running',running_loss)
+                # print('optimizer stepping')
+                # optimizer.step()
 
             if (iterr % print_every) == 0:
                 print('      ...iteration {}/{}'.format(iterr, total_iter_count), end='\r')
-            if (iterr % sample_every) == 0"
+            if (iterr % sample_every) == 0:
                 print('      generated_sample:', model.sample())
             
         epoch_time = time.clock() - epoch_start
         print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
-              in {:.4f}s".format(running_loss, running_corrects, epoch_time))
+              in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
     return model, running_loss, running_corrects
 
 '''
@@ -316,9 +336,14 @@ def plot_varying_epochs(loss_acc_dict):
     plt.title("accuracy")
 
 def main():
+    # split_csv test
+    cssv = "I am groot.,Groot, I am."
+    print(split_csv(cssv))
+
     star_filter = ['NEXTEPISODE']
     dataset = MovieScriptDataset('../datasets/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
+    dataset, _ = dataset.split_train_test(train_fraction=0.002) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
     lstm_mod = CoveredLSTM(len(charspace), 128, 2, len(charspace)).cuda()
