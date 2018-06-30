@@ -7,6 +7,7 @@ import unicodedata, string
 import glob, random 
 
 import torch
+import pickle
 
 '''
 -------- Helper Function ------
@@ -148,7 +149,7 @@ class CoveredLSTM(nn.LSTM):
     def __init__(self, input_size, hidden_size, num_layers, num_classes):
         super(CoveredLSTM, self).__init__(input_size, hidden_size, num_layers)
         self.num_layers = num_layers
-        self.stack_fc = nn.Linear(hidden_size * (1 + num_layers), hidden_size)
+        self.stack_fc = nn.Linear(hidden_size, hidden_size)
         self.fc_dropout = nn.Dropout(0.1)
         self.cover_fc = nn.Linear(hidden_size, num_classes)
     
@@ -157,14 +158,23 @@ class CoveredLSTM(nn.LSTM):
         cache = (hidden0, cell0) in a tuple
         '''
         output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
-        to_stack = [output]
-        for i in range(self.num_layers):
-            to_stack.append(hn[i:i+1])
-        output_combined = torch.cat(to_stack, 2)
-        stack_output = self.stack_fc(output_combined)
-        dropped_stack_output = self.fc_dropout(stack_output)
-        covered_output = self.cover_fc(dropped_stack_output) 
-        return covered_output, (hn, cn)    
+        # print('lstm output', output.data.size())
+        # print('lstm batchsize', output.batch_sizes, 'size', output.batch_sizes.size())
+        # to_stack = [output]
+        # for i in range(self.num_layers):
+        #     to_stack.append(hn[i:i+1])
+        # output_combined = torch.cat(to_stack, 2)
+        # output_combined = output.view()
+        if isinstance(output, rnn_utils.PackedSequence):
+            stack_output = self.stack_fc(output.data)
+            dropped_stack_output = self.fc_dropout(stack_output)
+            covered_output = self.cover_fc(dropped_stack_output) 
+            return covered_output, output.batch_sizes
+        else:
+            stack_output = self.stack_fc(output)
+            dropped_stack_output = self.fc_dropout(stack_output)
+            covered_output = self.cover_fc(dropped_stack_output) 
+            return covered_output, None
 
     def init_cache(self, batch=1, use_gpu = True):
         '''
@@ -197,9 +207,7 @@ class CoveredLSTM(nn.LSTM):
             for i in range(max_length):
                 if use_gpu: inputs = inputs.cuda()
                 output, cache = self.forward(inputs, cache)
-                # print(output)
                 _, gen = output.topk(1)
-                # print(gen)
 
                 # check EOL
                 if int(gen.item()) >= len(charspace) - 1: # meaning \n
@@ -210,6 +218,20 @@ class CoveredLSTM(nn.LSTM):
                     inputs = string_to_tensor(new_letter).view(1,1,-1)
             return output_line
 
+    def save_model(self, filename):
+        '''
+        Save the model parameters as a pickled object.
+        '''
+        with open(filename, 'wb') as outfile:
+            pickle.dump(self.state_dict(), outfile)
+
+    def load_model(self, filename):
+        '''
+        Load model parameters from specified file.
+        '''
+        with open(filename, 'rb') as infile:
+            loaded_dict = pickle.load(infile)
+            self.load_state_dict(loaded_dict)
 
 
 '''
@@ -219,7 +241,7 @@ from torch.autograd import Variable
 import torch.optim as optim
 
 def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
-          epoch=1, print_every=1, sample_every=40):
+          epoch=1, print_every=1, sample_every=160):
     loader = DataLoader(dataset, batch_size=batch_size, 
                         collate_fn=MovieScriptCollator, num_workers=4)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
@@ -248,102 +270,38 @@ def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
             # e.g. if the last batch is less than batch_size
 
             model.zero_grad()
+            output, _ = model(inputs, cache)
+            _, pred = output.topk(1)
 
-            # with the task needing to see all the outputs,
-            # there is no choice but to loop every letters and
-            # get the losses
+            loss = criterion(output, labels.data.long())
+            running_loss += loss.item()
+            if mode == 'train':
+                loss.backward()
+                optimizer.step()
 
-            # unpacking PackedSequence
-            # print(inputs.batch_sizes)
-            current_batch_in = 0
-            for batch_in_size in inputs.batch_sizes:
-                # handles cache in case of changing batch_in_size
-                # .contiguous() is to solve memory holes while slicing 
-                cache = (cache[0][:,:batch_in_size,:].contiguous(), 
-                         cache[1][:,:batch_in_size,:].contiguous())
-
-                # handling input for the current sequence
-                start = current_batch_in
-                end = current_batch_in + batch_in_size
-                batch_input = inputs.data[start: end].view(1, -1, len(charspace))
-                batch_label = labels.data[start: end].view(-1)
-                # print('input', batch_input.size(), 'label', batch_label.size())
-
-                output, cache = model(batch_input, cache)
-                _, pred = output.topk(1)
-                # print('output', output)#.size())
-                
-                loss = criterion(output.view(-1, len(charspace)), 
-                                 batch_label.long())
-                # print('itme', loss.item())
-                running_loss += loss.item() / float(len(dataset))
-                running_corrects += (pred == batch_label.long()).sum().item()
-                total_letters += batch_in_size.item()
-
-                if mode == 'train':
-                    retain = (current_batch_in + batch_in_size) < len(inputs.data)
-                    # retain_graph must be set to True except the last one
-                    # which is when all batches has been processed
-                    loss.backward(retain_graph=retain)
-                    optimizer.step()
-                    optimizer.zero_grad() 
-                    # call zero grad to clear since you have already descended
-
-                current_batch_in += batch_in_size
-
-            #if mode == 'train': 
-                #print('running',running_loss)
-                # print('optimizer stepping')
-                # optimizer.step()
+            running_corrects += (pred.view(-1) == labels.data.long()).sum().item()
+            total_letters += labels.data.size()[0]
 
             if (iterr % print_every) == 0:
                 print('      ...iteration {}/{}'.format(iterr, total_iter_count), end='\r')
             if (iterr % sample_every) == 0:
                 epoch_time = time.clock() - epoch_start
                 print('      generated_sample:', model.sample(), 
-                      '[loss:{:.5f} || acc:{:.3f} || in {:.4f}s' \
+                      '[loss:{:.5f} || acc:{:.3f} || in {:.4f}s]' \
                       .format(running_loss, running_corrects/total_letters, epoch_time))
             
         epoch_time = time.clock() - epoch_start
         print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
               in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
-        
-        model.save_state_dict("trekmodel_e{}.clstm".format(e))
+        model.save_model("trekmodel_e{}.clstm".format(e))
+        print('save_model finished')
         sample_filename = "treksample_e{}.txt".format(e)
         with open(sample_filename, 'w') as samplefile:
             for i in range(20):
-                samplefile.write(model.sample())
+                samplefile.write(model.sample() + '\n')
+        print('save_sample finished')
         
     return model, running_loss, running_corrects
-
-'''
------ Plotting
-'''
-import matplotlib.pyplot as plt 
-
-def plot_varying_epochs(loss_acc_dict):
-    plt.figure()
-    train_losses = [loss_acc_dict[i][0] for i in sorted(loss_acc_dict.keys())]
-    test_losses = [loss_acc_dict[i][1] for i in sorted(loss_acc_dict.keys())]
-    accuracy = [loss_acc_dict[i][2] for i in sorted(loss_acc_dict.keys())]
-
-    plt.subplot(131)
-    plt.plot(train_losses, color='purple')
-    plt.xticks(range(4), [1,2,5,10])
-    plt.xlabel('Epoch')
-    plt.title("train_loss")
-
-    plt.subplot(132)
-    plt.plot(test_losses, color='gray')
-    plt.xticks(range(4), [1,2,5,10])
-    plt.xlabel('Epoch')
-    plt.title("test_loss")
-
-    plt.subplot(133)
-    plt.plot(accuracy, color='blue')
-    plt.xticks(range(4), [1,2,5,10])
-    plt.xlabel('Epoch')
-    plt.title("accuracy")
 
 def main():
     # split_csv test
@@ -353,19 +311,15 @@ def main():
     star_filter = ['NEXTEPISODE']
     dataset = MovieScriptDataset('../dataset/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
-    #dataset, _ = dataset.split_train_test(train_fraction=0.002) # getting smaller data
+    # dataset, _ = dataset.split_train_test(train_fraction=0.001) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
     lstm_mod = CoveredLSTM(len(charspace), 200, 3, len(charspace)).cuda()
 
     print("training")
-    trained_model, loss, acc = train(train_data, lstm_mod, lr=5e-2, batch_size=32, mode='train', epoch=5)
+    trained_model, loss, acc = train(train_data, lstm_mod, lr=5e-2, batch_size=4, mode='train', epoch=5)
     print("On testing data")
-    final_model, loss, acc = train(test_data, trained_model, lr=5e-2, batch_size=32, mode='test')
-
-    for i in range(5):
-        print('GENERATED:', final_model.sample())
-
+    final_model, loss, acc = train(test_data, trained_model, lr=5e-2, batch_size=4, mode='test')
 
 if __name__ == '__main__':
     main()
