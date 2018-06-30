@@ -178,7 +178,7 @@ class CoveredLSTM(nn.LSTM):
             h0, c0 = h0.cuda(), c0.cuda()
         return (h0, c0)
 
-    def sample(self, start_letter=None, max_length=30, use_gpu=True):
+    def sample(self, start_letter=None, max_length=70, use_gpu=True):
         '''
         With the current model, get a sample line.
         category should already be parsed (an integer/tensor)
@@ -202,7 +202,7 @@ class CoveredLSTM(nn.LSTM):
                 # print(gen)
 
                 # check EOL
-                if int(gen.item()) >= len(charspace): # meaning it is no longer in charspace
+                if int(gen.item()) >= len(charspace) - 1: # meaning \n
                     break # EOL reached - stop
                 else:
                     new_letter = charspace[int(gen.item())]
@@ -219,7 +219,7 @@ from torch.autograd import Variable
 import torch.optim as optim
 
 def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
-          epoch=1, print_every=1, sample_every=5):
+          epoch=1, print_every=1, sample_every=40):
     loader = DataLoader(dataset, batch_size=batch_size, 
                         collate_fn=MovieScriptCollator, num_workers=4)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
@@ -291,19 +291,29 @@ def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
 
                 current_batch_in += batch_in_size
 
-            if mode == 'train': 
-                print('running',running_loss)
+            #if mode == 'train': 
+                #print('running',running_loss)
                 # print('optimizer stepping')
                 # optimizer.step()
 
             if (iterr % print_every) == 0:
                 print('      ...iteration {}/{}'.format(iterr, total_iter_count), end='\r')
             if (iterr % sample_every) == 0:
-                print('      generated_sample:', model.sample())
+                epoch_time = time.clock() - epoch_start
+                print('      generated_sample:', model.sample(), 
+                      '[loss:{:.5f} || acc:{:.3f} || in {:.4f}s' \
+                      .format(running_loss, running_corrects/total_letters, epoch_time))
             
         epoch_time = time.clock() - epoch_start
         print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
               in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
+        
+        model.save_state_dict("trekmodel_e{}.clstm".format(e))
+        sample_filename = "treksample_e{}.txt".format(e)
+        with open(sample_filename, 'w') as samplefile:
+            for i in range(20):
+                samplefile.write(model.sample())
+        
     return model, running_loss, running_corrects
 
 '''
@@ -341,17 +351,17 @@ def main():
     print(split_csv(cssv))
 
     star_filter = ['NEXTEPISODE']
-    dataset = MovieScriptDataset('../datasets/startrek/star_trek_transcripts_all_episodes_f.csv',
+    dataset = MovieScriptDataset('../dataset/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
-    dataset, _ = dataset.split_train_test(train_fraction=0.002) # getting smaller data
+    #dataset, _ = dataset.split_train_test(train_fraction=0.002) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
-    lstm_mod = CoveredLSTM(len(charspace), 128, 2, len(charspace)).cuda()
+    lstm_mod = CoveredLSTM(len(charspace), 200, 3, len(charspace)).cuda()
 
     print("training")
-    trained_model, loss, acc = train(train_data, lstm_mod, lr=5e-2, batch_size=8, mode='train')
+    trained_model, loss, acc = train(train_data, lstm_mod, lr=5e-2, batch_size=32, mode='train', epoch=5)
     print("On testing data")
-    final_model, loss, acc = train(test_data, trained_model, lr=5e-2, batch_size=8, mode='test')
+    final_model, loss, acc = train(test_data, trained_model, lr=5e-2, batch_size=32, mode='test')
 
     for i in range(5):
         print('GENERATED:', final_model.sample())
