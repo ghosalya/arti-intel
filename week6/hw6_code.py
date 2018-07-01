@@ -146,28 +146,38 @@ class CoveredLSTM(nn.LSTM):
     state of the last LSTM stack (if any). CrossEntropyLoss should be 
     used as the output is a tensor of length num_class.
     '''
-    def __init__(self, input_size, hidden_size, num_layers, num_classes):
+    def __init__(self, input_size, hidden_size, num_layers, num_classes, temperature=1):
         super(CoveredLSTM, self).__init__(input_size, hidden_size, num_layers)
         self.num_layers = num_layers
         self.stack_fc = nn.Linear(hidden_size, hidden_size)
         self.fc_dropout = nn.Dropout(0.1)
         self.cover_fc = nn.Linear(hidden_size, num_classes)
+        self.inv_temp = 1.0/temperature
+        self.softmax = nn.Softmax()
     
-    def forward(self, inputs, cache):
+    def forward(self, inputs, cache, temperature=None):
         '''
         cache = (hidden0, cell0) in a tuple
         '''
+        if temperature is not None:
+            temp_ = 1.0 / temperature
+        else:
+            temp_ = self.inv_temp
+
         output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
+
         if isinstance(output, rnn_utils.PackedSequence):
             stack_output = self.stack_fc(output.data)
             dropped_stack_output = self.fc_dropout(stack_output)
-            covered_output = self.cover_fc(dropped_stack_output) 
-            return covered_output, output.batch_sizes
+            covered_output = self.cover_fc(dropped_stack_output)
+            temperatured_output = self.softmax(covered_output * temp_)
+            return temperatured_output, output.batch_sizes
         else:
             stack_output = self.stack_fc(output)
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output) 
-            return covered_output, None
+            temperatured_output = self.softmax(covered_output * temp_)
+            return temperatured_output, None
 
     def init_cache(self, batch=1, use_gpu = True):
         '''
@@ -182,7 +192,7 @@ class CoveredLSTM(nn.LSTM):
         return (h0, c0)
 
     def sample(self, start_letter=None, max_length=70, 
-               temperature=0.75, use_gpu=True):
+               use_gpu=True, temperature=0.5):
         '''
         With the current model, get a sample line.
         category should already be parsed (an integer/tensor)
@@ -200,11 +210,8 @@ class CoveredLSTM(nn.LSTM):
 
             for i in range(max_length):
                 if use_gpu: inputs = inputs.cuda()
-                output, cache = self.forward(inputs, cache)
-                if temperature is not None:
-                    output = output**(1/temperature)
-                    output_sum = output.sum()
-                    output = output / output_sum
+                output, cache = self.forward(inputs, cache, 
+                                             temperature=temperature)
                 _, gen = output.topk(1)
 
                 # check EOL
