@@ -158,13 +158,6 @@ class CoveredLSTM(nn.LSTM):
         cache = (hidden0, cell0) in a tuple
         '''
         output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
-        # print('lstm output', output.data.size())
-        # print('lstm batchsize', output.batch_sizes, 'size', output.batch_sizes.size())
-        # to_stack = [output]
-        # for i in range(self.num_layers):
-        #     to_stack.append(hn[i:i+1])
-        # output_combined = torch.cat(to_stack, 2)
-        # output_combined = output.view()
         if isinstance(output, rnn_utils.PackedSequence):
             stack_output = self.stack_fc(output.data)
             dropped_stack_output = self.fc_dropout(stack_output)
@@ -195,7 +188,7 @@ class CoveredLSTM(nn.LSTM):
         '''
         if start_letter == None:
             # start_letter = random.choice(string.ascii_letters)
-            start_letter = random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            start_letter = random.choice("ABCDEFGHIJKLMNOPRSTUVWZ")
 
         self.train() # put in train mode to keep randomization
 
@@ -240,68 +233,122 @@ Training
 from torch.autograd import Variable
 import torch.optim as optim
 
-def train(dataset, model, batch_size=8, use_gpu=True, mode='train', lr=5e-2,
-          epoch=1, print_every=1, sample_every=160):
+def train(train_dataset, test_dataset, model, 
+          batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, 
+          print_every=1, sample_every=160):
+    '''
+    Loop through epoch and execute train_single
+    '''
+    optimizer = optim.SGD(model.parameters(), lr=learnrate, momentum=0.9)
+    criterion = nn.CrossEntropyLoss() 
+
+    train_loss_acc = []
+    test_loss_acc = []
+
+    for e in range(epoch):
+        # training
+        model, loss, acc = train_single(train_dataset, model, optimizer, criterion,
+                                        batch_size=batch_size, use_gpu=use_gpu, mode='train',
+                                        print_every=print_every, sample_every=sample_every)
+        train_loss_acc.append((loss, acc))
+        # testing
+        model, loss, acc = train_single(test_dataset, model, optimizer, criterion,
+                                        batch_size=batch_size, use_gpu=use_gpu, mode='test',
+                                        print_every=print_every, sample_every=sample_every)
+        test_loss_acc.append((loss, acc))
+
+        model.save_model("models/trekmodel_e{}.clstm".format(e))
+        
+        sample_filename = "samples/treksample_e{}.txt".format(e)
+        with open(sample_filename, 'w') as samplefile:
+            for i in range(20):
+                samplefile.write(model.sample() + '\n')
+        
+        statistic_filename = "trekstats.stt"
+        with open(statistic_filename, 'wb') as statfile:
+            data = {'train': train_loss_acc,
+                    'test': test_loss_acc}
+            pickle.dump(data, statfile)
+
+    
+    return model, train_loss_acc, test_loss_acc
+
+
+def train_single(dataset, model, optimizer, criterion, batch_size=8, use_gpu=True, 
+                 mode='train', print_every=1, sample_every=160):
     loader = DataLoader(dataset, batch_size=batch_size, 
                         collate_fn=MovieScriptCollator, num_workers=4)
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    criterion = nn.CrossEntropyLoss() 
-    # criterion = nn.NLLLoss()
     model.train(mode == 'train')
     model.zero_grad()
     total_iter_count = (len(dataset) // batch_size) + 1
 
-    for e in range(epoch):
-        running_loss = 0.0
-        running_corrects = 0
-        total_letters = 0
-        epoch_start = time.clock()
+    running_loss = 0.0
+    running_corrects = 0
+    total_letters = 0
+    epoch_start = time.clock()
 
-        iterr = 0
-        for data in loader:
-            iterr += 1
-            optimizer.zero_grad()
-            inputs, labels = data['input'], data['label']
-            if use_gpu:
-                inputs, labels = inputs.cuda(), labels.cuda()
+    iterr = 0
+    for data in loader:
+        iterr += 1
+        optimizer.zero_grad()
+        inputs, labels = data['input'], data['label']
+        if use_gpu:
+            inputs, labels = inputs.cuda(), labels.cuda()
 
-            cache = model.init_cache(batch=data['batch_size'], use_gpu=use_gpu)
-            # from MovieScriptCollator, each batch has a 'batch size' to handle end cases 
-            # e.g. if the last batch is less than batch_size
+        cache = model.init_cache(batch=data['batch_size'], use_gpu=use_gpu)
+        # from MovieScriptCollator, each batch has a 'batch size' to handle end cases 
+        # e.g. if the last batch is less than batch_size
 
-            model.zero_grad()
-            output, _ = model(inputs, cache)
-            _, pred = output.topk(1)
+        model.zero_grad()
+        output, _ = model(inputs, cache)
+        _, pred = output.topk(1)
 
-            loss = criterion(output, labels.data.long())
-            running_loss += loss.item()
-            if mode == 'train':
-                loss.backward()
-                optimizer.step()
+        loss = criterion(output, labels.data.long())
+        running_loss += loss.item()
+        if mode == 'train':
+            loss.backward()
+            optimizer.step()
 
-            running_corrects += (pred.view(-1) == labels.data.long()).sum().item()
-            total_letters += labels.data.size()[0]
+        running_corrects += (pred.view(-1) == labels.data.long()).sum().item()
+        total_letters += labels.data.size()[0]
 
-            if (iterr % print_every) == 0:
-                print('      ...iteration {}/{}'.format(iterr, total_iter_count), end='\r')
-            if (iterr % sample_every) == 0:
-                epoch_time = time.clock() - epoch_start
-                print('      generated_sample:', model.sample(), 
-                      '[loss:{:.5f} || acc:{:.3f} || in {:.4f}s]' \
-                      .format(running_loss, running_corrects/total_letters, epoch_time))
+        if (iterr % print_every) == 0:
+            print('      ...iteration {}/{}'.format(iterr, total_iter_count), end='\r')
+        if (iterr % sample_every) == 0 and mode == 'train':
+            epoch_time = time.clock() - epoch_start
+            print('      generated_sample:', model.sample(), 
+                    '[loss:{:.5f} || acc:{:.3f} || in {:.4f}s]' \
+                    .format(running_loss, running_corrects/total_letters, epoch_time))
             
-        epoch_time = time.clock() - epoch_start
-        print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
-              in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
-        model.save_model("trekmodel_e{}.clstm".format(e))
-        print('save_model finished')
-        sample_filename = "treksample_e{}.txt".format(e)
-        with open(sample_filename, 'w') as samplefile:
-            for i in range(20):
-                samplefile.write(model.sample() + '\n')
-        print('save_sample finished')
+    epoch_time = time.clock() - epoch_start
+    print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
+            in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
         
     return model, running_loss, running_corrects
+
+'''
+------ plotting ------
+'''
+import matplotlib.pyplot as plt 
+
+def plot_over_epoch(train_loss_acc, test_loss_acc):
+    # plot loss
+    train_loss, train_acc = zip(*train_loss_acc)
+    test_loss, test_acc = zip(*test_loss_acc)
+
+    plt.figure()
+    plt.subplot(121)
+    plt.plot(train_loss, color='purple')
+    plt.plot(test_loss, color='red')
+    plt.title('Losses')
+
+    plt.subplot(122)
+    plt.plot(train_acc, color='blue')
+    plt.plot(test_acc, color='cyan')
+    plt.title('Accuracy')
+
+    plt.savefig('plot_over_epoch.png')
+
 
 def main():
     # split_csv test
@@ -314,12 +361,11 @@ def main():
     # dataset, _ = dataset.split_train_test(train_fraction=0.001) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
-    lstm_mod = CoveredLSTM(len(charspace), 200, 3, len(charspace)).cuda()
+    lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
-    print("training")
-    trained_model, loss, acc = train(train_data, lstm_mod, lr=5e-2, batch_size=4, mode='train', epoch=5)
-    print("On testing data")
-    final_model, loss, acc = train(test_data, trained_model, lr=5e-2, batch_size=4, mode='test')
+    trained_model, loss, acc = train(train_data, test_data, lstm_mod, 
+                                     learnrate=5e-3, batch_size=4, epoch=25)
+    plot_over_epoch(loss, acc)
 
 if __name__ == '__main__':
     main()
