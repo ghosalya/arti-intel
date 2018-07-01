@@ -378,7 +378,7 @@ def main():
 
     lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
-    trained_model, loss, acc = train(train_data, test_data, lstm_mod, resume_from=25,
+    trained_model, loss, acc = train(train_data, test_data, lstm_mod, resume_from=0,
                                      learnrate=5e-3, batch_size=4, epoch=50)
     plot_over_epoch(loss, acc)
 
