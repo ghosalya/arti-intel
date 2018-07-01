@@ -182,7 +182,7 @@ class CoveredLSTM(nn.LSTM):
         return (h0, c0)
 
     def sample(self, start_letter=None, max_length=70, 
-               temperature=0.5, use_gpu=True):
+               temperature=0.75, use_gpu=True):
         '''
         With the current model, get a sample line.
         category should already be parsed (an integer/tensor)
@@ -240,17 +240,20 @@ import torch.optim as optim
 
 def train(train_dataset, test_dataset, model, 
           batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, 
-          print_every=1, sample_every=160):
+          print_every=1, sample_every=160, resume_from=0):
     '''
     Loop through epoch and execute train_single
     '''
     optimizer = optim.SGD(model.parameters(), lr=learnrate, momentum=0.9)
     criterion = nn.CrossEntropyLoss() 
 
+    if resume_from > 0:
+        model.load_model('model/trekmodel_e{}.clstm'.format(resume_from - 1))
+
     train_loss_acc = []
     test_loss_acc = []
 
-    for e in range(epoch):
+    for e in range(resume_from, epoch):
         # training
         model, loss, acc = train_single(train_dataset, model, optimizer, criterion,
                                         batch_size=batch_size, use_gpu=use_gpu, mode='train',
@@ -368,8 +371,8 @@ def main():
 
     lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
-    trained_model, loss, acc = train(train_data, test_data, lstm_mod, 
-                                     learnrate=5e-3, batch_size=4, epoch=25)
+    trained_model, loss, acc = train(train_data, test_data, lstm_mod, resume_from=25,
+                                     learnrate=5e-3, batch_size=4, epoch=50)
     plot_over_epoch(loss, acc)
 
 if __name__ == '__main__':
