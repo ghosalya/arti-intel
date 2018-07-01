@@ -181,7 +181,8 @@ class CoveredLSTM(nn.LSTM):
             h0, c0 = h0.cuda(), c0.cuda()
         return (h0, c0)
 
-    def sample(self, start_letter=None, max_length=70, use_gpu=True):
+    def sample(self, start_letter=None, max_length=70, 
+               temperature=0.5, use_gpu=True):
         '''
         With the current model, get a sample line.
         category should already be parsed (an integer/tensor)
@@ -200,6 +201,10 @@ class CoveredLSTM(nn.LSTM):
             for i in range(max_length):
                 if use_gpu: inputs = inputs.cuda()
                 output, cache = self.forward(inputs, cache)
+                if temperature is not None:
+                    output = output**(1/temperature)
+                    output_sum = output.sum()
+                    output = output / output_sum
                 _, gen = output.topk(1)
 
                 # check EOL
