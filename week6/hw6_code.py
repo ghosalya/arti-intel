@@ -7,12 +7,13 @@ import unicodedata, string
 import glob, random 
 
 import torch
+import numpy.random as rand
 import pickle
 
 '''
 -------- Helper Function ------
 '''
-charspace = string.ascii_letters + " .,;'-\n" # use \n as EOL
+charspace = string.ascii_letters + " ?!.,:;'-\n" # use \n as EOL
 def letter_index(letter): 
     return charspace.find(letter)
 
@@ -146,38 +147,31 @@ class CoveredLSTM(nn.LSTM):
     state of the last LSTM stack (if any). CrossEntropyLoss should be 
     used as the output is a tensor of length num_class.
     '''
-    def __init__(self, input_size, hidden_size, num_layers, num_classes, temperature=1):
+    def __init__(self, input_size, hidden_size, num_layers, num_classes):
         super(CoveredLSTM, self).__init__(input_size, hidden_size, num_layers)
         self.num_layers = num_layers
         self.stack_fc = nn.Linear(hidden_size, hidden_size)
         self.fc_dropout = nn.Dropout(0.1)
         self.cover_fc = nn.Linear(hidden_size, num_classes)
-        self.inv_temp = 1.0/temperature
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=0)
     
-    def forward(self, inputs, cache, temperature=None):
+    def forward(self, inputs, cache):
         '''
         cache = (hidden0, cell0) in a tuple
         '''
-        if temperature is not None:
-            temp_ = 1.0 / temperature
-        else:
-            temp_ = self.inv_temp
-
         output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
 
         if isinstance(output, rnn_utils.PackedSequence):
             stack_output = self.stack_fc(output.data)
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output)
-            temperatured_output = self.softmax(covered_output * temp_)
-            return temperatured_output, output.batch_sizes
+            return covered_output, output.batch_sizes
         else:
             stack_output = self.stack_fc(output)
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output) 
-            temperatured_output = self.softmax(covered_output * temp_)
-            return temperatured_output, None
+            # temperatured_output = self.softmax(covered_output * temp_)
+            return covered_output, None
 
     def init_cache(self, batch=1, use_gpu = True):
         '''
@@ -191,7 +185,7 @@ class CoveredLSTM(nn.LSTM):
             h0, c0 = h0.cuda(), c0.cuda()
         return (h0, c0)
 
-    def sample(self, start_letter=None, max_length=70, 
+    def sample(self, start_letter=None, max_length=100, 
                use_gpu=True, temperature=0.5):
         '''
         With the current model, get a sample line.
@@ -201,8 +195,6 @@ class CoveredLSTM(nn.LSTM):
             # start_letter = random.choice(string.ascii_letters)
             start_letter = random.choice("ABCDEFGHIJKLMNOPRSTUVWZ")
 
-        self.train() # put in train mode to keep randomization
-
         with torch.no_grad():
             inputs = string_to_tensor(start_letter).view(1,1,-1)
             cache = self.init_cache()
@@ -210,15 +202,15 @@ class CoveredLSTM(nn.LSTM):
 
             for i in range(max_length):
                 if use_gpu: inputs = inputs.cuda()
-                output, cache = self.forward(inputs, cache, 
-                                             temperature=temperature)
-                _, gen = output.topk(1)
-
+                output, cache = self.forward(inputs, cache)
+                output = self.softmax(output.view(-1) / temperature)
+                multinomial = torch.multinomial(output, 1)
+                gen = multinomial[0]
                 # check EOL
-                if int(gen.item()) >= len(charspace) - 1: # meaning \n
+                if gen >= len(charspace) - 1: # meaning \n
                     break # EOL reached - stop
                 else:
-                    new_letter = charspace[int(gen.item())]
+                    new_letter = charspace[gen]
                     output_line += new_letter
                     inputs = string_to_tensor(new_letter).view(1,1,-1)
             return output_line
@@ -247,7 +239,7 @@ import torch.optim as optim
 
 def train(train_dataset, test_dataset, model, 
           batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, 
-          print_every=1, sample_every=160, resume_from=0):
+          print_every=1, sample_every=800, resume_from=0, save_model_every=5):
     '''
     Loop through epoch and execute train_single
     '''
@@ -262,6 +254,7 @@ def train(train_dataset, test_dataset, model,
 
     for e in range(resume_from, epoch):
         # training
+        print('EPOCH', e)
         model, loss, acc = train_single(train_dataset, model, optimizer, criterion,
                                         batch_size=batch_size, use_gpu=use_gpu, mode='train',
                                         print_every=print_every, sample_every=sample_every)
@@ -272,7 +265,8 @@ def train(train_dataset, test_dataset, model,
                                         print_every=print_every, sample_every=sample_every)
         test_loss_acc.append((loss, acc))
 
-        model.save_model("models/trekmodel_e{}.clstm".format(e))
+        if (e + 1) % save_model_every == 0:
+            model.save_model("models/trekmodel_e{}.clstm".format(e))
         
         sample_filename = "samples/treksample_e{}.txt".format(e)
         with open(sample_filename, 'w') as samplefile:
@@ -285,12 +279,12 @@ def train(train_dataset, test_dataset, model,
                     'test': test_loss_acc}
             pickle.dump(data, statfile)
 
-    
+    # model.save_model("models/trekmodel_latest.clstm")
     return model, train_loss_acc, test_loss_acc
 
 
 def train_single(dataset, model, optimizer, criterion, batch_size=8, use_gpu=True, 
-                 mode='train', print_every=1, sample_every=160):
+                 mode='train', print_every=1, sample_every=800):
     loader = DataLoader(dataset, batch_size=batch_size, 
                         collate_fn=MovieScriptCollator, num_workers=4)
     model.train(mode == 'train')
@@ -339,7 +333,7 @@ def train_single(dataset, model, optimizer, criterion, batch_size=8, use_gpu=Tru
     print("      >> Epoch loss {:.5f} accuracy {:.3f}        \
             in {:.4f}s".format(running_loss, running_corrects/total_letters, epoch_time))
         
-    return model, running_loss, running_corrects
+    return model, running_loss, running_corrects/total_letters
 
 '''
 ------ plotting ------
@@ -373,14 +367,14 @@ def main():
     star_filter = ['NEXTEPISODE']
     dataset = MovieScriptDataset('../dataset/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
-    # dataset, _ = dataset.split_train_test(train_fraction=0.001) # getting smaller data
+    # dataset, _ = dataset.split_train_test(train_fraction=0.0005) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
     lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
-    trained_model, loss, acc = train(train_data, test_data, lstm_mod, resume_from=0,
-                                     learnrate=5e-3, batch_size=4, epoch=50)
-    plot_over_epoch(loss, acc)
+    trained_model, train_loss_acc, test_loss_acc = train(train_data, test_data, lstm_mod, resume_from=0,
+                                                         learnrate=7.5e-2, batch_size=8, epoch=50)
+    plot_over_epoch(train_loss_acc, test_loss_acc)
 
 if __name__ == '__main__':
     main()
