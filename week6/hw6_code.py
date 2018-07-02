@@ -238,12 +238,13 @@ from torch.autograd import Variable
 import torch.optim as optim
 
 def train(train_dataset, test_dataset, model, 
-          batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, 
+          batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, lr_gamma=0.7, lr_step=1,
           print_every=1, sample_every=800, resume_from=0, save_model_every=5):
     '''
     Loop through epoch and execute train_single
     '''
     optimizer = optim.SGD(model.parameters(), lr=learnrate, momentum=0.9)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, lr_step, lr_gamma)
     criterion = nn.CrossEntropyLoss() 
 
     if resume_from > 0:
@@ -264,6 +265,8 @@ def train(train_dataset, test_dataset, model,
                                         batch_size=batch_size, use_gpu=use_gpu, mode='test',
                                         print_every=print_every, sample_every=sample_every)
         test_loss_acc.append((loss, acc))
+
+        lr_scheduler.step()
 
         if (e + 1) % save_model_every == 0:
             model.save_model("models/trekmodel_e{}.clstm".format(e))
@@ -373,7 +376,7 @@ def main():
     lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
     trained_model, train_loss_acc, test_loss_acc = train(train_data, test_data, lstm_mod, resume_from=0,
-                                                         learnrate=7.5e-2, batch_size=8, epoch=50)
+                                                         learnrate=5e-1, batch_size=8, epoch=50)
     plot_over_epoch(train_loss_acc, test_loss_acc)
 
 if __name__ == '__main__':
