@@ -4,7 +4,7 @@ LSTM - Star Trek Script
 '''
 import os.path, time
 import unicodedata, string
-import glob, random 
+import random 
 
 import torch
 import numpy.random as rand
@@ -13,32 +13,27 @@ import pickle
 '''
 -------- Helper Function ------
 '''
-charspace = string.ascii_letters + " ?!.,:;'-\n" # use \n as EOL
+charspace = string.ascii_letters + string.digits + " ?!.,:;'-~" # use \n as EOL
 def letter_index(letter): 
     return charspace.find(letter)
 
-# find all files in path
-def find(path): 
-    return glob.glob(path)
-
 # strip unacceptable symbols
-def strip_symbols(s, to_space='=/+()[]'):
+def strip_symbols(s, to_space='/+()[]'):
     for t in to_space:
         s = s.replace(t, ' ')
     return s
 
 # turn unicode string to ascii
 def convert_to_ascii(unicode_strings):
-    return ''.join(c for c in unicodedata.normalize('NFD', unicode_strings)
+    return ''.join(c for c in unicodedata.normalize('NFD', unicode_strings.strip())
                     if unicodedata.category(c) != 'Mn' and c in charspace)
 
 # convert string to a one-hot tensor
-def string_to_tensor(inputstring, pad_to=0):
-    # pad_to: pad result to a certain length
-    tensor = torch.zeros(max(len(inputstring), pad_to), 
-                         len(charspace))
+def string_to_tensor(inputstring):
+    tensor = torch.zeros(len(inputstring), len(charspace))
     for i, letter in enumerate(inputstring):
         tensor[i][letter_index(letter)] = 1
+    # print(inputstring, len(inputstring), tensor.size())
     return tensor
 
 # split csv according to `,` but preserving any `, ` which is usually in a line
@@ -110,19 +105,12 @@ class MovieScriptDataset(Dataset):
         line_tensor = string_to_tensor(line)
         # since the goal is to predict the next letter,
         # the label should be the line shifted, plus EOL (\n)
-        label = line[1:] + '\n'
+        label = line[1:] + charspace[-1]
         label_tensor = torch.Tensor([charspace.index(l) for l in label])
-
+        # print(line, len(line), line_tensor.size(), label_tensor.size())
         return {'input': line_tensor,
                 'label': label_tensor,
                 'seq_len': len(line)}
-
-    # @staticmethod
-    # def collate_function():
-    #     '''
-    #     Gives a specific collate_fn to be used with this dataset
-    #     '''
-    #     return collator
 
 # must be executed at top-level, otherwise cant pickle
 def MovieScriptCollator(tensorlist):
@@ -162,16 +150,17 @@ class CoveredLSTM(nn.LSTM):
         output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
 
         if isinstance(output, rnn_utils.PackedSequence):
-            stack_output = self.stack_fc(output.data)
+            # stack_output = self.stack_fc(output.data)
+            stack_output = output.data
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output)
-            return covered_output, output.batch_sizes
+            return covered_output, (hn, cn)
         else:
-            stack_output = self.stack_fc(output)
+            # stack_output = self.stack_fc(output)
+            stack_output = output
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output) 
-            # temperatured_output = self.softmax(covered_output * temp_)
-            return covered_output, None
+            return covered_output, (hn, cn)
 
     def init_cache(self, batch=1, use_gpu = True):
         '''
@@ -196,23 +185,24 @@ class CoveredLSTM(nn.LSTM):
             start_letter = random.choice("ABCDEFGHIJKLMNOPRSTUVWZ")
 
         with torch.no_grad():
-            inputs = string_to_tensor(start_letter).view(1,1,-1)
+            inputs = string_to_tensor(start_letter)#.view(1,1,-1)
             cache = self.init_cache()
             output_line = start_letter
 
             for i in range(max_length):
                 if use_gpu: inputs = inputs.cuda()
+                inputs = rnn_utils.pack_sequence([inputs])
                 output, cache = self.forward(inputs, cache)
                 output = self.softmax(output.view(-1) / temperature)
-                multinomial = torch.multinomial(output, 1)
-                gen = multinomial[0]
+                multinom = torch.multinomial(output, 1)
+                gen = multinom.item()
                 # check EOL
                 if gen >= len(charspace) - 1: # meaning \n
                     break # EOL reached - stop
                 else:
                     new_letter = charspace[gen]
                     output_line += new_letter
-                    inputs = string_to_tensor(new_letter).view(1,1,-1)
+                    inputs = string_to_tensor(new_letter)#.view(1,1,-1)
             return output_line
 
     def save_model(self, filename):
@@ -238,7 +228,7 @@ from torch.autograd import Variable
 import torch.optim as optim
 
 def train(train_dataset, test_dataset, model, 
-          batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, lr_gamma=0.85, lr_step=1,
+          batch_size=8, use_gpu=True, learnrate=5e-4, epoch=5, lr_gamma=0.95, lr_step=1,
           print_every=1, sample_every=800, resume_from=0, save_model_every=5):
     '''
     Loop through epoch and execute train_single
@@ -266,6 +256,22 @@ def train(train_dataset, test_dataset, model,
                                         print_every=print_every, sample_every=sample_every)
         test_loss_acc.append((loss, acc))
 
+        # line testing
+        random_idx = random.randint(0, len(test_dataset))
+        random_line = test_dataset.line_list[random_idx]
+        print('      sample line:', random_line, len(random_line))
+        random_input = test_dataset[random_idx]['input']
+        print('        ', random_input.size())
+        if use_gpu:
+            random_input = random_input.cuda()
+        cache = model.init_cache(batch=1, use_gpu=use_gpu)
+        output, _ = model(random_input.view(-1, 1, len(charspace)), cache)
+        _, pred = output.topk(1)
+
+        random_output = random_line[0] + ''.join([charspace[idx] for idx in pred.view(-1)])
+        print('      sample output:', random_output[:-1], len(random_output))
+        print('        ', pred.size())
+
         lr_scheduler.step()
 
         if (e + 1) % save_model_every == 0:
@@ -273,7 +279,7 @@ def train(train_dataset, test_dataset, model,
         
         sample_filename = "samples/treksample_e{}.txt".format(e)
         with open(sample_filename, 'w') as samplefile:
-            for i in range(20):
+            for i in 'ABCDEFGHIJKLMNOPRSTUVWZ':
                 samplefile.write(model.sample() + '\n')
         
         statistic_filename = "trekstats.stt"
@@ -282,7 +288,7 @@ def train(train_dataset, test_dataset, model,
                     'test': test_loss_acc}
             pickle.dump(data, statfile)
 
-    # model.save_model("models/trekmodel_latest.clstm")
+    model.save_model("models/trekmodel_latest.clstm")
     return model, train_loss_acc, test_loss_acc
 
 
@@ -316,7 +322,7 @@ def train_single(dataset, model, optimizer, criterion, batch_size=8, use_gpu=Tru
         _, pred = output.topk(1)
 
         loss = criterion(output, labels.data.long())
-        running_loss += loss.item()
+        running_loss += loss.item() / output.size()[0]
         if mode == 'train':
             loss.backward()
             optimizer.step()
@@ -370,13 +376,13 @@ def main():
     star_filter = ['NEXTEPISODE']
     dataset = MovieScriptDataset('../dataset/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
-    # dataset, _ = dataset.split_train_test(train_fraction=0.0005) # getting smaller data
-    train_data, test_data = dataset.split_train_test(train_fraction=0.8)
+    # dataset, _ = dataset.split_train_test(train_fraction=0.001) # getting smaller data
+    train_data, test_data = dataset.split_train_test()
 
-    lstm_mod = CoveredLSTM(len(charspace), 200, 3, len(charspace)).cuda()
+    lstm_mod = CoveredLSTM(len(charspace), 100, 2, len(charspace)).cuda()
 
-    trained_model, train_loss_acc, test_loss_acc = train(train_data, test_data, lstm_mod, resume_from=0,
-                                                         learnrate=5e-1, batch_size=16, epoch=50)
+    trained_model, train_loss_acc, test_loss_acc = train(train_data, test_data, lstm_mod, resume_from=0, save_model_every=1,
+                                                         learnrate=1e-1, batch_size=8, sample_every=3000, epoch=25)
     plot_over_epoch(train_loss_acc, test_loss_acc)
 
 if __name__ == '__main__':
