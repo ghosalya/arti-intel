@@ -259,9 +259,8 @@ def train(train_dataset, test_dataset, model,
         # line testing
         random_idx = random.randint(0, len(test_dataset))
         random_line = test_dataset.line_list[random_idx]
-        print('      sample line:', random_line, len(random_line))
+        print('      sample line:', random_line)
         random_input = test_dataset[random_idx]['input']
-        print('        ', random_input.size())
         if use_gpu:
             random_input = random_input.cuda()
         cache = model.init_cache(batch=1, use_gpu=use_gpu)
@@ -269,8 +268,7 @@ def train(train_dataset, test_dataset, model,
         _, pred = output.topk(1)
 
         random_output = random_line[0] + ''.join([charspace[idx] for idx in pred.view(-1)])
-        print('      sample output:', random_output[:-1], len(random_output))
-        print('        ', pred.size())
+        print('      sample output:', random_output[:-1])
 
         lr_scheduler.step()
 
@@ -379,10 +377,10 @@ def main():
     # dataset, _ = dataset.split_train_test(train_fraction=0.001) # getting smaller data
     train_data, test_data = dataset.split_train_test()
 
-    lstm_mod = CoveredLSTM(len(charspace), 100, 2, len(charspace)).cuda()
+    lstm_mod = CoveredLSTM(len(charspace), 200, 3, len(charspace)).cuda()
 
     trained_model, train_loss_acc, test_loss_acc = train(train_data, test_data, lstm_mod, resume_from=0, save_model_every=1,
-                                                         learnrate=1e-1, batch_size=8, sample_every=3000, epoch=25)
+                                                         learnrate=1e-1, batch_size=16, sample_every=3000, epoch=25)
     plot_over_epoch(train_loss_acc, test_loss_acc)
 
 if __name__ == '__main__':
