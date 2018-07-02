@@ -371,7 +371,7 @@ def main():
     dataset = MovieScriptDataset('../dataset/startrek/star_trek_transcripts_all_episodes_f.csv',
                                  filterwords=star_filter)
     # dataset, _ = dataset.split_train_test(train_fraction=0.0005) # getting smaller data
-    train_data, test_data = dataset.split_train_test()
+    train_data, test_data = dataset.split_train_test(train_fraction=0.8)
 
     lstm_mod = CoveredLSTM(len(charspace), 200, 2, len(charspace)).cuda()
 
