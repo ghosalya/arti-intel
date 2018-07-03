@@ -13,7 +13,7 @@ import pickle
 '''
 -------- Helper Function ------
 '''
-charspace = string.ascii_letters + string.digits + " ?!.,:;'-~" # use \n as EOL
+charspace = string.ascii_letters + string.digits + " ?!.,:;'-\n" # use \n as EOL
 def letter_index(letter): 
     return charspace.find(letter)
 
@@ -128,7 +128,7 @@ def MovieScriptCollator(tensorlist):
 '''
 import torch.nn as nn
 import torch.nn.utils.rnn as rnn_utils
-class CoveredLSTM(nn.LSTM):
+class CoveredLSTM(nn.Module):
     '''
     A stack of LSTM that is covered by a fully-connected layer
     as the last layer. The fully-connected layer is fed the hidden
@@ -136,8 +136,12 @@ class CoveredLSTM(nn.LSTM):
     used as the output is a tensor of length num_class.
     '''
     def __init__(self, input_size, hidden_size, num_layers, num_classes):
-        super(CoveredLSTM, self).__init__(input_size, hidden_size, num_layers)
+        super(CoveredLSTM, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
         self.num_layers = num_layers
+
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers)
         self.stack_fc = nn.Linear(hidden_size, hidden_size)
         self.fc_dropout = nn.Dropout(0.1)
         self.cover_fc = nn.Linear(hidden_size, num_classes)
@@ -145,19 +149,17 @@ class CoveredLSTM(nn.LSTM):
     
     def forward(self, inputs, cache):
         '''
-        cache = (hidden0, cell0) in a tuple
+        Forward through the lstm, then check if PackedSequence
         '''
-        output, (hn, cn) = super(CoveredLSTM, self).forward(inputs, cache)
+        output, (hn, cn) = self.lstm(inputs, cache)
 
         if isinstance(output, rnn_utils.PackedSequence):
-            # stack_output = self.stack_fc(output.data)
-            stack_output = output.data
+            stack_output = self.stack_fc(output.data)
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output)
             return covered_output, (hn, cn)
         else:
-            # stack_output = self.stack_fc(output)
-            stack_output = output
+            stack_output = self.stack_fc(output)
             dropped_stack_output = self.fc_dropout(stack_output)
             covered_output = self.cover_fc(dropped_stack_output) 
             return covered_output, (hn, cn)
@@ -181,11 +183,10 @@ class CoveredLSTM(nn.LSTM):
         category should already be parsed (an integer/tensor)
         '''
         if start_letter == None:
-            # start_letter = random.choice(string.ascii_letters)
             start_letter = random.choice("ABCDEFGHIJKLMNOPRSTUVWZ")
 
         with torch.no_grad():
-            inputs = string_to_tensor(start_letter)#.view(1,1,-1)
+            inputs = string_to_tensor(start_letter)
             cache = self.init_cache()
             output_line = start_letter
 
@@ -202,7 +203,7 @@ class CoveredLSTM(nn.LSTM):
                 else:
                     new_letter = charspace[gen]
                     output_line += new_letter
-                    inputs = string_to_tensor(new_letter)#.view(1,1,-1)
+                    inputs = string_to_tensor(new_letter)
             return output_line
 
     def save_model(self, filename):
