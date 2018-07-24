@@ -56,7 +56,7 @@ if __name__ == "__main__":
   # cost - the cost of the plan
   # Your code here
 
-  from solved_search import HWProblem, get_hadd_function
+  from solved_search import HWProblem, HeuristicFF
 
   # Question 1
   print "\n++++++++++++++++++++++++++ QUESTION 1 ++++++++++++++++++++++++++++"
@@ -75,7 +75,8 @@ if __name__ == "__main__":
   print "\n++++++++++++++++++++++++++ QUESTION 2 ++++++++++++++++++++++++++++"
   tic = time.time()
   hw_prob = HWProblem(task)
-  heur_fn = get_hadd_function(hw_prob, search.breadth_first_search)
+  heur_fn = HeuristicFF(hw_prob)
+
   soln_node = search.best_first_graph_search(hw_prob, heur_fn)
   hw_prob.accept_solution_node(soln_node)
   plan = hw_prob.soln_path
@@ -84,5 +85,41 @@ if __name__ == "__main__":
 
   toc = time.time()
   printOutputVerbose(tic, toc, plan, cost, final_state, task.goals)
+
+
+  print "\n++++++++++++++++++++++++++ HEURISTIC COMPARISON ++++++++++++++++++++++++++++"
+
+  import winsound
+
+  dirName = "prodigy-bw"
+  problem_filenames = ["bw-simple",
+                       "bw-sussman",
+                       "bw-large-a",
+                       "bw-large-b",
+                       "bw-large-c",
+                       "bw-large-d"
+                       ]
+  tasks = [pddl_parser.parse(dirName + '/domain.pddl', dirName+'/'+probfile+'.pddl') 
+           for probfile in problem_filenames]
+
+  result = {}
+
+  print "\nComparison:"
+  for task in tasks:
+    hw_prob = HWProblem(task)
+    heur_fn = HeuristicFF(hw_prob)
+
+    start_node = search.Node(hw_prob.initial)
+    start_node.expand(hw_prob)
+    hff = heur_fn(start_node)
+    # print task.name + " " + str(hff)
+    
+    hw_prob.no_del = False
+    soln_node = search.best_first_graph_search(hw_prob, heur_fn)
+    hw_prob.accept_solution_node(soln_node)
+    result[task.name] = (hff, len(hw_prob.soln_path))
+    print task.name + " hff:" + str(hff) + " plan: " + str(len(hw_prob.soln_path))
+    winsound.PlaySound("sound.wav", winsound.SND_FILENAME)
+    # winsound.MessageBeep()
 
   
