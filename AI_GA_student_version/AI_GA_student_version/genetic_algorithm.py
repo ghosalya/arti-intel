@@ -41,12 +41,30 @@ class GeneticAlgorithm:
 		## 2. Create a new population based on these "top-fit" parents
 		## 3. The new population can be comprised of A% of clone, B% of mutation, and C% of 
 		##    crossovers of these "top-fit parents"
+		self.population.sort(key=lambda x:x.fitness_value, reverse=True)
+		parent_portion = int(0.1 * len(self.population)) # 10%
+		topfit_parents = self.population[:parent_portion]
+
+		topfit_normalizer = sum(parent.fitness_value for parent in topfit_parents)
+		topfit_probability = [parent.fitness_value / topfit_normalizer for parent in topfit_parents]
+		
+		clone_limit = int(0.2 * len(self.population)) # 10%
+		mutate_limit = clone_limit + int(0.2 * len(self.population)) # the next 10%
+
+		new_population = []
+
+		for i in range(len(self.population)):
+			# parent = np.random.choice(topfit_normalizer, topfit_probability)
+			if i < clone_limit:
+				new_population.append(self.clone(topfit_parents))
+			elif i < mutate_limit:
+				new_population.append(self.mutation(topfit_parents))
+			else:
+				new_population.append(self.crossover(topfit_parents))
+
+		self.population = new_population
 
 		return None
-
-
-
-
 
 	def compute_population_fitness(self, days=100):
 		index = 0

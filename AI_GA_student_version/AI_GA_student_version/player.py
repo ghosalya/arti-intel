@@ -37,16 +37,19 @@ class Player:
 	        # in the first case: mutate cannot increase an attribute to more than 4
 	        # in the first case: mutate cannot decrease an attribute to less than zero
 
-		if sum(self.attributes.get_all_attributes) <= self.attributes.attribute_points_limit:
+		if sum(self.attributes.get_all_attributes()) <= self.attributes.attribute_points_limit:
 			possible_attr = [at for at in range(self.attributes.attribute_types)
 							 if self.attributes.get_attribute(at) < 4]
-			attribute_to_increase = random.choice(possible_attr)
-			increased_value = 1 + self.attributes.get_attribute(attribute_to_increase)
+			while True:
+				attribute_to_increase = random.choice(possible_attr)
+				increased_value = 1 + self.attributes.get_attribute(attribute_to_increase)
+				if increased_value < 4: break
+			
 			self.attributes.change_attribute(attribute_to_increase, increased_value)
 		else:
 			# swap attributes
-			attr_a = randint(0, self.attributes.attribute_types)
-			attr_b = random.choice([at for at in range(self.attributes.attribute_types) if at != attr_a])
+			attr_a = randint(0, self.attributes.attribute_types-1)
+			attr_b = random.choice([at for at in range(self.attributes.attribute_types-1) if at != attr_a])
 			val_a = self.attributes.get_attribute(attr_a)
 			val_b = self.attributes.get_attribute(attr_b)
 
@@ -68,7 +71,10 @@ class Player:
 		# stop swapping if 5 attributes were swapped, or if one has gone through all 7 attributes
 		
 		swapped = 0
-		for i in range(self.attributes.attribute_types):
+		attr_indexes = list(range(self.attributes.attribute_types))
+		random.shuffle(attr_indexes)
+
+		for i in attr_indexes:
 			my_val = self.attributes.get_attribute(i)
 			so_val = significant_other.attributes.get_attribute(i)
 
@@ -79,9 +85,9 @@ class Player:
 			# check conditions
 			undo = False
 
-			if sum(self.attributes.get_all_attributes) > self.attributes.attribute_points_limit: 
+			if sum(self.attributes.get_all_attributes()) > self.attributes.attribute_points_limit: 
 				undo = True
-			if sum(significant_other.attributes.get_all_attributes) > significant_other.attributes.attribute_points_limit:
+			if sum(significant_other.attributes.get_all_attributes()) > significant_other.attributes.attribute_points_limit:
 				undo = True
 
 			if undo:
