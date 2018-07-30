@@ -195,6 +195,7 @@ def breadth_first_search(problem):
                 if problem.goal_test(child.state):
                     return child
                 frontier.append(child)
+    print("solution not found")
     return None
 
 def best_first_graph_search(problem, f):

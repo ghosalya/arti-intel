@@ -7,18 +7,17 @@
   (:predicates (on ?x ?y)
 			   (on-table ?x)
 			   (clear ?x)
-			   (arm-empty)
 			   (holding ?x)
-			   (color ?x ?rgb) ;;; added color
-			   (is-sprayer ?x) ;;; check if box is sprayer
-			   (pickupable ?x) ;;; check if pickupable
-	       	)
+			   (color ?x ?rgb) 
+			   (can-pick ?x) 
+			   (is-sprayer ?x)
+			   (arm-empty))
   (:action pick-up
 	     :parameters (?ob1)
 	     :precondition (and 
 		 					(clear ?ob1) 
 							(on-table ?ob1) 
-							(pickupable ?ob1)
+							(can-pick ?ob1)
 							(arm-empty) 
 						)
 	     :effect
@@ -53,14 +52,18 @@
 		   (not (arm-empty))
 		   (not (on ?sob ?sunderob))))
    (:action spray
-	     :parameters (?sprayer ?targetbox ?targetcolor)
+	     :parameters (?sprayer ?spraycolor ?box ?boxcolor)
 	     :precondition (and 
-		 					(clear ?targetbox) 
-							(on-table ?targetbox) 
+		 					(clear ?box) 
+							(on-table ?box) 
+							(color ?box ?boxcolor) 
 							(holding ?sprayer) 
-							(color ?sprayer ?targetcolor) 
+							(color ?sprayer ?spraycolor) 
 							(is-sprayer ?sprayer)
 						)
 	     :effect
-	     (and (color ?targetbox ?targetcolor))))
+	     (and 
+		 	(color ?box ?spraycolor)
+			(not (color ?box ?boxcolor))
+			 )))
 

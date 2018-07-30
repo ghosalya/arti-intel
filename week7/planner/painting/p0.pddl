@@ -14,21 +14,21 @@
         red
     )
     (:init
-
         ;; block stuff
         (clear block)
         (on-table block)
-        (pickupable block)
+        (can-pick block)
+        (color block red)
 
         (clear green-sprayer)
         (on-table green-sprayer)
         (is-sprayer green-sprayer)
-        (pickupable green-sprayer)
+        (can-pick green-sprayer)
 
         (clear red-sprayer)
         (on-table red-sprayer)
         (is-sprayer red-sprayer)
-        (pickupable red-sprayer)
+        (can-pick red-sprayer)
 
         ;; spray coloring
         (color green-sprayer green)

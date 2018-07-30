@@ -1,11 +1,10 @@
-;;; first painting problem
+;;; second painting problem
 
-(define (problem painting001)
+(define (problem painting002)
     (:domain painting)
     (:objects
-        ;; block
-        A 
-        B
+        block-a 
+        block-b
 
         ;; sprayer
         green-sprayer
@@ -15,22 +14,30 @@
         red
     )
     (:init
-        (clear A)
-        (on-table A)
-        (color A red)
+        ;; block stuff
+        (clear block-a)
+        (on-table block-a)
+        (color block-a red)
+        (can-pick block-a)
 
-        (clear B)
-        (on-table B)
-        (color B red)
+        (clear block-b)
+        (on-table block-b)
+        (color block-b red)
+        (can-pick block-b)
 
+        ;; sprayer stuff
         (clear green-sprayer)
         (on-table green-sprayer)
+        (can-pick green-sprayer)
+        (is-sprayer green-sprayer)
         (color green-sprayer green)
+
+        (arm-empty)
     )
     (:goal
         (and
-            (color B green)
-            (on A B) ;; is this A on B?
+            (color block-b green)
+            (on block-a block-b)
             (arm-empty)
         )
     )
