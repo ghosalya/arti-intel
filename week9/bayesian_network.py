@@ -12,6 +12,9 @@ class ProbabilityEvent:
     ## Check if the input query for that event takes the event's legal value
     def check_event_value(self, input):
         for event, event_value in input.items():
+            if event not in self.conditions: 
+                # means that the event doesnt matter
+                continue
             if self.conditions[event] != event_value:
                 return False
         return True
@@ -53,10 +56,9 @@ class BayesianNetwork:
 
         self.nodes = new_nodes
 
-        for n in self.nodes:
-            print(n)
-
-        print('calculate children')
+        # for n in self.nodes:
+        #     print(n)
+        # print('calculate children')
 
         for name, probabilities in conditional_event_probability:
             new_nodes = []
@@ -79,8 +81,8 @@ class BayesianNetwork:
 
             if new_nodes: self.nodes = new_nodes
             # print("----")
-        for n in self.nodes:
-            print(n)
+        # for n in self.nodes:
+        #     print(n)
  
     
     ## Compute the probability of an event, given a series of events
