@@ -1,5 +1,7 @@
 # from types import FloatType
-
+import sys
+if sys.version_info[0] < 3:
+    raise Exception("Must be using Python 3")
 
 ## This class describe an event with probability value
 ## variables: conditions e.g. A = True, B = True / False, A = True & B = False, etc
